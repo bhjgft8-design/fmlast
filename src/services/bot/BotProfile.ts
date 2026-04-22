@@ -12,7 +12,7 @@ export async function initBotProfile() {
 
         if (botId && botLfm) {
             // Cleanup: If the username is already held by a different (legacy) ID, clear it first
-            const existingWithName = await prisma.user.findUnique({ where: { lastfmUsername: botLfm } });
+            const existingWithName = await prisma.user.findFirst({ where: { lastfmUsername: botLfm } });
             if (existingWithName && existingWithName.discordId !== botId) {
                 console.log(`[Bot] Clearing legacy bot profile (${existingWithName.discordId}) to migrate to ${botId}`);
                 await prisma.user.delete({ where: { discordId: existingWithName.discordId } });
