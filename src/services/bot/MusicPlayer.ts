@@ -21,15 +21,28 @@ import path from 'path';
 
 const COOKIES_FILE = path.join(process.cwd(), 'cookies.txt');
 
-// If the file doesn't exist but the env var is provided, write it
-if (!fs.existsSync(COOKIES_FILE) && process.env.YOUTUBE_COOKIES) {
+// Always (re)create cookies.txt from env var on every boot to ensure freshness
+if (process.env.YOUTUBE_COOKIES) {
     try {
-        // Replace literal \n with actual newlines if it was pasted as a single line
-        const cookieContent = process.env.YOUTUBE_COOKIES.replace(/\\n/g, '\n');
+        let cookieContent = process.env.YOUTUBE_COOKIES;
+        // Railway may encode newlines as literal \n — restore them
+        if (!cookieContent.includes('\n')) {
+            cookieContent = cookieContent.replace(/\\n/g, '\n');
+        }
+        // Strip any wrapping quotes Railway might inject
+        cookieContent = cookieContent.replace(/^["']|["']$/g, '');
         fs.writeFileSync(COOKIES_FILE, cookieContent, 'utf-8');
-        console.log('[MusicPlayer] Successfully created cookies.txt from environment variable.');
+        const lines = cookieContent.split('\n').filter(l => l.trim().length > 0);
+        console.log(`[MusicPlayer] ✅ cookies.txt written (${lines.length} lines, ${cookieContent.length} bytes)`);
+        console.log(`[MusicPlayer] 🍪 First line: ${lines[0]?.substring(0, 60)}...`);
     } catch (err) {
         console.error('[MusicPlayer] Failed to write cookies.txt from env:', err);
+    }
+} else {
+    if (fs.existsSync(COOKIES_FILE)) {
+        console.log('[MusicPlayer] 🍪 Using existing cookies.txt file');
+    } else {
+        console.warn('[MusicPlayer] ⚠️ No YOUTUBE_COOKIES env var and no cookies.txt found!');
     }
 }
 
@@ -259,7 +272,7 @@ export class MusicPlayer {
 
             console.log(`[MusicPlayer] 🎵 Piped Streaming (yt-dlp): ${streamUrl}`);
 
-            // Build yt-dlp args to bypass YouTube bot detection
+            // Build yt-dlp args
             const ytdlArgs: any = {
                 output: '-',
                 format: 'bestaudio*',
