@@ -226,9 +226,28 @@ export class MusicPlayer {
 
         try {
             queue.isPlaying = true;
-            console.log(`[MusicPlayer] 🎵 Streaming (play-dl): ${track.url}`);
-            
-            const stream = await play.stream(track.url, { discordPlayerCompatibility: true });
+            let stream;
+            try {
+                stream = await play.stream(track.url, { discordPlayerCompatibility: true });
+            } catch (err: any) {
+                if (err.message?.includes('Sign in') || err.message?.includes('bot') || err.message?.includes('unavailable')) {
+                    console.warn(`[MusicPlayer] YouTube blocked IP for ${track.title}. Falling back to SoundCloud...`);
+                    const searchQuery = track.artistName && track.trackTitle 
+                        ? `${track.artistName} ${track.trackTitle}` 
+                        : track.title;
+                        
+                    // Let play-dl automatically handle SoundCloud client ID
+                    const scSearch = await play.search(searchQuery, { limit: 1, source: { soundcloud: 'tracks' } });
+                    if (scSearch && scSearch.length > 0) {
+                        stream = await play.stream(scSearch[0].url, { discordPlayerCompatibility: true });
+                        queue.textChannel.send(`⚠️ **YouTube blocked this stream!** Falling back to SoundCloud audio for \`${track.title}\`...`).catch(() => {});
+                    } else {
+                        throw new Error("YouTube blocked the stream and no fallback was found on SoundCloud.");
+                    }
+                } else {
+                    throw err;
+                }
+            }
             
             const resource = createAudioResource(stream.stream, {
                 inputType: stream.type,
