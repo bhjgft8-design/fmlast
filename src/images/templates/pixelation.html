@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 800px;
+            height: 800px;
+            background: transparent;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #container {
+            width: 800px;
+            height: 800px;
+            position: relative;
+            background: #111;
+            border-radius: 40px;
+            overflow: hidden;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+            image-rendering: pixelated;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <canvas id="pixelCanvas" width="800" height="800"></canvas>
+    </div>
+    
+    <!-- Hidden source image for Puppeteer to detect and wait for -->
+    <img id="sourceImage" src="{{artworkUrl}}" style="display: none;">
+
+    <script>
+        const canvas = document.getElementById('pixelCanvas');
+        const ctx = canvas.getContext('2d');
+        const img = document.getElementById('sourceImage');
+        
+        // Data injected by Puppeteer
+        const pixelFactor = parseFloat("{{pixelFactor}}"); // 0.01 (very pixelated) to 1.0 (clear)
+
+        const draw = () => {
+            const w = canvas.width;
+            const h = canvas.height;
+
+            // 1. Calculate small dimensions
+            const sw = Math.max(1, Math.floor(w * pixelFactor));
+            const sh = Math.max(1, Math.floor(h * pixelFactor));
+
+            // 2. Create an offscreen canvas to scale down
+            const offscreen = document.createElement('canvas');
+            offscreen.width = sw;
+            offscreen.height = sh;
+            const offCtx = offscreen.getContext('2d');
+            
+            // Draw original image scaled down
+            offCtx.drawImage(img, 0, 0, sw, sh);
+
+            // 3. Draw back to main canvas scaled up
+            ctx.imageSmoothingEnabled = false;
+            ctx.webkitImageSmoothingEnabled = false;
+            ctx.mozImageSmoothingEnabled = false;
+            ctx.msImageSmoothingEnabled = false;
+
+            ctx.drawImage(offscreen, 0, 0, sw, sh, 0, 0, w, h);
+        };
+
+        if (img.complete) draw();
+        else img.onload = draw;
+    </script>
+</body>
+</html>

@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 800px;
+            height: 800px;
+            background: #111;
+            overflow: hidden;
+            font-family: 'Segoe UI', Roboto, sans-serif;
+        }
+
+        #grid {
+            display: grid;
+            width: 800px;
+            height: 800px;
+            gap: 2px;
+            background: #222;
+        }
+
+        .tile {
+            width: 100%;
+            height: 100%;
+            background-image: url('{{artworkUrl}}');
+            background-size: 800px 800px;
+            background-repeat: no-repeat;
+            transition: all 0.3s ease;
+        }
+
+        /* Highlight correctly placed tiles if desired, 
+           but for a game we want it to look seamless but scrambled */
+    </style>
+</head>
+    <div id="grid" data-size="{{size}}">
+        <!-- Generates tiles in the order provided by the component -->
+        {{#each tiles}}
+            <div class="tile" data-x="{{posX}}" data-y="{{posY}}"></div>
+        {{/each}}
+    </div>
+
+    <script>
+        // Apply grid dimensions
+        const grid = document.getElementById('grid');
+        const size = grid.getAttribute('data-size');
+        grid.style.gridTemplateColumns = `repeat(${size}, 1fr)`;
+        grid.style.gridTemplateRows = `repeat(${size}, 1fr)`;
+
+        // Apply tile positions
+        document.querySelectorAll('.tile').forEach(tile => {
+            const x = tile.getAttribute('data-x');
+            const y = tile.getAttribute('data-y');
+            tile.style.backgroundPosition = `${x}% ${y}%`;
+        });
+    </script>
+</body>
+</html>

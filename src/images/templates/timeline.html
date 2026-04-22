@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700;900&family=Outfit:wght@400;700;900&display=swap" rel="stylesheet">
+    <style>
+        :root {
+            --bg-color: #050612;
+            --accent-blue: #648cff;
+            --card-bg: rgba(20, 22, 45, 0.75);
+            --card-width: 210px;
+            --card-height: 360px;
+            --padding: 30px;
+            --header-height: 160px;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background-color: var(--bg-color);
+            color: white;
+            font-family: 'Inter', sans-serif;
+            width: var(--page-width);
+            height: var(--page-height);
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        /* MOSAIC BACKGROUND */
+        .mosaic-container {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            display: grid;
+            grid-template-columns: repeat(auto-fill, 200px);
+            grid-template-rows: repeat(auto-fill, 200px);
+            filter: blur(80px) brightness(0.35);
+            opacity: 0.6;
+            z-index: 0;
+        }
+
+        .mosaic-tile {
+            width: 200px;
+            height: 200px;
+            object-fit: cover;
+        }
+
+        .gradient-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle at center, rgba(8, 10, 30, 0.8) 0%, rgba(5, 6, 18, 0.98) 100%);
+            z-index: 1;
+        }
+
+        .noise {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0.03;
+            pointer-events: none;
+            z-index: 2;
+            background-image: url('data:image/svg+xml,%3Csvg viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg"%3E%3Cfilter id="noiseFilter"%3E%3CfeTurbulence type="fractalNoise" baseFrequency="0.65" numOctaves="3" stitchTiles="stitch"/%3E%3C/filter%3E%3Crect width="100%25" height="100%25" filter="url(%23noiseFilter)"/%3E%3C/svg%3E');
+        }
+
+        /* CONTENT */
+        .content {
+            position: relative;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            width: 100%;
+            height: 100%;
+            padding: var(--padding);
+        }
+
+        /* HEADER */
+        .header {
+            height: var(--header-height);
+            display: flex;
+            align-items: center;
+            padding-left: 20px;
+        }
+
+        .avatar {
+            width: 80px;
+            height: 80px;
+            border-radius: 50%;
+            border: 3px solid rgba(255, 255, 255, 0.1);
+            margin-right: 25px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+
+        .header-info h1 {
+            font-family: 'Outfit', sans-serif;
+            font-size: 36px;
+            font-weight: 900;
+            letter-spacing: -0.5px;
+            margin-bottom: 5px;
+        }
+
+        .header-info p {
+            font-size: 16px;
+            color: rgba(255, 255, 255, 0.5);
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .sub-label {
+            font-weight: 700;
+            color: var(--accent-blue);
+            text-transform: uppercase;
+            font-size: 14px;
+            letter-spacing: 2px;
+            margin-top: 8px;
+        }
+
+        /* TIMELINE AREA */
+        .timeline-area {
+            flex: 1;
+            display: flex;
+            align-items: center;
+            position: relative;
+            margin-top: 20px;
+            padding: 0 40px;
+        }
+
+        .connection-line {
+            position: absolute;
+            top: 50%;
+            left: 105px;
+            right: 105px;
+            height: 2px;
+            background: linear-gradient(to right, rgba(100, 140, 255, 0) 0%, rgba(100, 140, 255, 0.2) 20%, rgba(100, 140, 255, 0.2) 80%, rgba(100, 140, 255, 0) 100%);
+            z-index: 5;
+        }
+
+        .era-list {
+            display: flex;
+            gap: 30px;
+            z-index: 10;
+        }
+
+        .era-card {
+            width: var(--card-width);
+            height: var(--card-height);
+            background: var(--card-bg);
+            border-radius: 18px;
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            backdrop-filter: blur(10px);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            padding: 20px;
+            position: relative;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+        }
+
+        .card-accent-bar {
+            position: absolute;
+            bottom: 6px;
+            left: 20px;
+            right: 20px;
+            height: 3px;
+            border-radius: 2px;
+            background-color: var(--accent-color, #ffffff);
+            opacity: 0.8;
+        }
+
+        .cover-art {
+            width: 160px;
+            height: 160px;
+            border-radius: 12px;
+            object-fit: cover;
+            margin-bottom: 25px;
+            box-shadow: 0 8px 20px rgba(0,0,0,0.4);
+        }
+
+        .placeholder-art {
+            width: 160px;
+            height: 160px;
+            border-radius: 12px;
+            background: #15172b;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 40px;
+            margin-bottom: 25px;
+        }
+
+        .era-vibe {
+            font-size: 14px;
+            font-weight: 700;
+            color: var(--accent-color, #ffffff);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 12px;
+            text-align: center;
+        }
+
+        .era-label {
+            font-family: 'Outfit', sans-serif;
+            font-size: 24px;
+            font-weight: 700;
+            margin-bottom: 8px;
+            text-align: center;
+        }
+
+        .top-artist {
+            font-size: 15px;
+            color: rgba(255, 255, 255, 0.6);
+            margin-bottom: 8px;
+            text-align: center;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            width: 100%;
+        }
+
+        .playcount {
+            font-size: 12px;
+            color: rgba(255, 255, 255, 0.35);
+            text-align: center;
+        }
+
+        /* CONNECTOR NODE */
+        .node {
+            position: absolute;
+            top: calc(50% - 10px);
+            left: calc(50% - 10px);
+            width: 20px;
+            height: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 20;
+            pointer-events: none;
+        }
+        
+        /* Node is hard to position in absolute flow within flex cards, so we put it in the card flow */
+        .node-container {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: 30px;
+            height: 30px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 30;
+        }
+
+        .node-outer {
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: rgba(100, 140, 255, 0.15);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .node-inner {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--accent-color, #ffffff);
+            box-shadow: 0 0 10px var(--accent-color, #ffffff);
+        }
+
+        /* FOOTER */
+        .footer {
+            height: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .footer p {
+            font-size: 12px;
+            color: rgba(100, 140, 255, 0.3);
+            letter-spacing: 3px;
+            font-weight: 700;
+            text-transform: uppercase;
+        }
+    </style>
+</head>
+<body style="--page-width: {{width}}px; --page-height: {{height}}px;">
+    <div class="mosaic-container">
+        {{#each eras}}
+        {{#if coverUrl}}<img src="{{coverUrl}}" class="mosaic-tile">{{/if}}
+        {{/each}}
+    </div>
+    <div class="gradient-overlay"></div>
+    <div class="noise"></div>
+
+    <div class="content">
+        <div class="header">
+            <img src="{{avatarUrl}}" class="avatar" alt="Avatar">
+            <div class="header-info">
+                <h1>{{displayName}}</h1>
+                <p>{{playcount}} total scrobbles • {{username}}</p>
+                <div class="sub-label">{{viewLabel}}</div>
+            </div>
+        </div>
+
+        <div class="timeline-area">
+            <div class="connection-line"></div>
+            <div class="era-list">
+                {{#each eras}}
+                <div class="era-card" style="--accent-color: {{color}}">
+                    <div class="node-container">
+                        <div class="node-outer"><div class="node-inner"></div></div>
+                    </div>
+                    {{#if coverUrl}}
+                    <img src="{{coverUrl}}" class="cover-art" alt="{{label}}">
+                    {{else}}
+                    <div class="placeholder-art">💿</div>
+                    {{/if}}
+                    <div class="era-vibe">{{eraName}}</div>
+                    <div class="era-label">{{label}}</div>
+                    <div class="top-artist">{{topArtist}}</div>
+                    <div class="playcount">{{plays}} plays</div>
+                    <div class="card-accent-bar"></div>
+                </div>
+                {{/each}}
+            </div>
+        </div>
+
+        <div class="footer">
+            <p>Era Timeline • Powered by Last.fm</p>
+        </div>
+    </div>
+</body>
+</html>

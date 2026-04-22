@@ -1,0 +1,25 @@
+node_modules
+# Keep environment variables out of version control
+.env
+
+/generated/prisma
+
+# Bot generated media files
+*.ogg
+*.webm
+*.mp4
+*.mp3
+*.webp
+*.jpg
+*.png
+
+# Temporary and local dev files
+headers.txt
+headers_raw.txt
+scratch/
+.gemini/
+*.log
+
+# OS generated files
+.DS_Store
+Thumbs.db

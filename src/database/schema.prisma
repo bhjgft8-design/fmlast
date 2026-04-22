@@ -1,0 +1,190 @@
+generator client {
+  provider = "prisma-client-js"
+  previewFeatures = ["postgresqlExtensions"]
+}
+
+datasource db {
+  provider   = "postgresql"
+  extensions = [citext, pg_trgm]
+}
+
+model User {
+  id                 String   @id @default(cuid())
+  discordId          String   @unique @map("discord_id")
+  lastfmUsername     String?  @map("lastfm_username") @db.Citext
+  lastfmSessionKey   String?  @map("lastfm_session_key")
+  lastfmRequestToken String?  @map("lastfm_request_token")
+  discogsUsername    String?  @unique @map("discogs_username") @db.Citext
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  settings           Json?
+
+  guilds             GuildMember[]
+  userArtists        UserArtist[]
+  userTracks         UserTrack[]
+  userAlbums         UserAlbum[]
+  crowns             Crown[]
+  crownHistory       CrownHistory[]
+  friends            Friend[]       @relation("UserFriends")
+  friendedBy         Friend[]       @relation("UserFriendedBy")
+  importJobs         ImportJob[]
+
+  @@index([discordId])
+  @@index([lastfmUsername])
+  @@index([lastfmSessionKey])
+  @@map("users")
+}
+
+model Guild {
+  id         String   @id @default(cuid())
+  guildId    String   @unique @map("guild_id")
+  createdAt  DateTime @default(now())
+  
+  members    GuildMember[]
+  crowns     Crown[]
+
+  @@index([guildId])
+  @@map("guilds")
+}
+
+model GuildMember {
+  id        String   @id @default(cuid())
+  guildId   String   @map("guild_id")
+  userId    String   @map("user_id")
+  
+  guild     Guild    @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, userId])
+  @@index([guildId])
+  @@index([userId])
+  @@map("guild_members")
+}
+
+model UserArtist {
+  id         String   @id @default(cuid())
+  userId     String   @map("user_id")
+  artistName String   @map("artist_name") @db.Citext
+  playcount  Int      @default(0)
+  
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, artistName])
+  @@index([userId])
+  @@index([artistName])
+  @@map("user_artists")
+}
+
+model UserTrack {
+  id         String   @id @default(cuid())
+  userId     String   @map("user_id")
+  artistName String   @map("artist_name") @db.Citext
+  trackName  String   @map("track_name") @db.Citext
+  playcount  Int      @default(0)
+  
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, artistName, trackName])
+  @@index([userId])
+  @@index([trackName])
+  @@map("user_tracks")
+}
+
+model UserAlbum {
+  id         String   @id @default(cuid())
+  userId     String   @map("user_id")
+  artistName String   @map("artist_name") @db.Citext
+  albumName  String   @map("album_name") @db.Citext
+  playcount  Int      @default(0)
+  
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, artistName, albumName])
+  @@index([userId])
+  @@index([albumName])
+  @@map("user_albums")
+}
+
+model Crown {
+  id         String   @id @default(cuid())
+  guildId    String   @map("guild_id")
+  artistName String   @map("artist_name") @db.Citext
+  userId     String   @map("user_id")
+  playcount        Int      @default(0)
+  initialPlaycount Int      @default(0) @map("initial_playcount")
+  claimedAt        DateTime @default(now()) @map("claimed_at")
+  updatedAt        DateTime @default(now()) @updatedAt @map("updated_at")
+
+  guild            Guild    @relation(fields: [guildId], references: [guildId], onDelete: Cascade)
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([guildId, artistName])
+  @@index([guildId])
+  @@index([userId])
+  @@map("crowns")
+}
+
+model CrownHistory {
+  id               String   @id @default(cuid())
+  guildId          String   @map("guild_id")
+  artistName       String   @map("artist_name") @db.Citext
+  userId           String   @map("user_id")
+  playcountAtClaim Int      @map("playcount_at_claim")
+  playcountAtLoss  Int?     @map("playcount_at_loss")
+  claimedAt        DateTime @map("claimed_at")
+  lostAt           DateTime @default(now()) @map("lost_at")
+
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([guildId, artistName])
+  @@map("crown_history")
+}
+
+model Friend {
+  id        String   @id @default(cuid())
+  userId    String   @map("user_id")
+  friendId  String   @map("friend_id")
+  status    String   @default("PENDING") // PENDING, ACCEPTED
+  createdAt DateTime @default(now())
+
+  user      User     @relation("UserFriends", fields: [userId], references: [id], onDelete: Cascade)
+  friend    User     @relation("UserFriendedBy", fields: [friendId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, friendId])
+  @@index([userId])
+  @@map("friends")
+}
+
+model ImportJob {
+  id              String   @id @default(cuid())
+  userId          String   @map("user_id")
+  source          String   // "SPOTIFY" or "APPLE"
+  status          String   @default("PENDING") // PENDING, PROCESSING, COMPLETED, FAILED
+  totalTracks     Int      @default(0)
+  scrobbledTracks Int      @default(0)
+  isLegacy        Boolean  @default(false) @map("is_legacy")
+  lastProcessedAt DateTime? @map("last_processed_at")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  user            User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tracks          ImportTrack[]
+
+  @@map("import_jobs")
+}
+
+model ImportTrack {
+  id        String   @id @default(cuid())
+  jobId     String   @map("job_id")
+  artist    String
+  track     String
+  album     String?
+  timestamp Int
+  processed Boolean  @default(false)
+
+  job       ImportJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId, processed])
+  @@unique([jobId, artist, track, timestamp]) // Duplicate prevention
+  @@map("import_tracks")
+}

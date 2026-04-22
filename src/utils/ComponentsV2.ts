@@ -1,0 +1,126 @@
+/**
+ * Discord Components v2 (Type 17) Builder
+ * Provides a clean interface for creating 'Message Accessory' containers (cards).
+ */
+export class ComponentsV2 {
+    private payload: any = {
+        type: 17,
+        spoiler: false,
+        components: []
+    };
+
+    /** Set the side accent color of the container (Global color strips disabled) */
+    setAccent(color: number): this {
+        // this.payload.accent_color = color;
+        return this;
+    }
+
+    /** Set whether the entire container is a spoiler */
+    setSpoiler(spoiler: boolean): this {
+        this.payload.spoiler = spoiler;
+        return this;
+    }
+
+    addFullImage(url: string, description?: string, spoiler = false): this {
+        const item: any = {
+            media: { url },
+            spoiler
+        };
+        if (description && description.length > 0) {
+            item.description = description;
+        }
+
+        this.payload.components.push({
+            type: 12,
+            items: [item]
+        });
+        return this;
+    }
+
+    /** Alias for addFullImage */
+    addMedia(url: string, description = '', spoiler = false): this {
+        return this.addFullImage(url, description, spoiler);
+    }
+
+    /** Add a horizontal separator line */
+    addSeparator(): this {
+        this.payload.components.push({
+            type: 14,
+            spacing: 1,
+            divider: true
+        });
+        return this;
+    }
+
+    /** 
+     * Add a small thumbnail (Type 11) to the right of text content
+     */
+    addThumbnail(url: string, content: string): this {
+        this.payload.components.push({
+            type: 9,
+            components: [{ type: 10, content }],
+            accessory: {
+                type: 11,
+                media: { url }
+            }
+        });
+        return this;
+    }
+
+    /** Add a standard text block to the container */
+    addText(content: string): this {
+        this.payload.components.push({
+            type: 10,
+            content
+        });
+        return this;
+    }
+
+    /** 
+     * Add a section with text and an accessory (button/media)
+     * @param content The text to display in the section
+     * @param accessory The component object for the accessory (Type 2 button, Type 11 media)
+     */
+    addAction(content: string, accessory: any): this {
+        this.payload.components.push({
+            type: 9,
+            components: [{
+                type: 10,
+                content
+            }],
+            accessory
+        });
+        return this;
+    }
+
+    /** Add a simple link button as an accessory to a section */
+    addLinkButton(content: string, label: string, url: string, emoji?: { name: string; id?: string }): this {
+        return this.addAction(content, {
+            type: 2,
+            style: 5, // Link Style
+            label,
+            url,
+            emoji
+        });
+    }
+
+    /** Add a standard Action Row (Type 1) containing multiple components */
+    addRow(components: any[]): this {
+        this.payload.components.push({
+            type: 1,
+            components
+        });
+        return this;
+    }
+
+    /** 
+     * Build the final payload compatible with channel.send() or interaction.reply()
+     * @param flags Flag 32768 is usually required for stable v2 rendering
+     */
+    build(flags = 32768): any {
+        return {
+            components: [this.payload],
+            flags
+        };
+    }
+}

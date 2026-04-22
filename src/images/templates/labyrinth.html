@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@1,700&family=Outfit:wght@400;700&display=swap');
+
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 1080px; /* High Res */
+            height: 1080px;
+            background: #050505;
+            overflow: hidden;
+            font-family: 'Outfit', sans-serif;
+            color: white;
+        }
+
+        #container {
+            position: relative;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            flex-direction: column;
+        }
+
+        #background {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-size: cover;
+            background-position: center;
+            filter: blur(20px) brightness(0.4) saturate(1.2);
+            transform: scale(1.1); /* Prevent white edges from blur */
+            z-index: 1;
+        }
+
+        #overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: radial-gradient(circle at center, transparent 0%, rgba(0,0,0,0.6) 100%);
+            z-index: 2;
+        }
+
+        #content {
+            position: relative;
+            z-index: 3;
+            text-align: center;
+            max-width: 900px;
+            padding: 40px;
+        }
+
+        .quote-icon {
+            font-family: 'Playfair Display', serif;
+            font-size: 180px;
+            color: rgba(255,255,255,0.1);
+            position: absolute;
+            top: -120px;
+            left: 0;
+            line-height: 1;
+        }
+
+        .lyrics {
+            font-family: 'Playfair Display', serif;
+            font-style: italic;
+            font-weight: 700;
+            font-size: 64px;
+            line-height: 1.3;
+            text-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            margin-bottom: 40px;
+            /* Fade in staggered animation if needed, but for static screenshot we just show it */
+        }
+
+        .lyrics p {
+            margin: 20px 0;
+            opacity: 0.95;
+            letter-spacing: -0.5px;
+        }
+
+        .meta {
+            margin-top: 60px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 20px;
+            opacity: 0.8;
+            transform: translateY(20px);
+        }
+
+        .brand {
+            letter-spacing: 4px;
+            font-weight: 700;
+            font-size: 16px;
+            color: rgba(255,255,255,0.3);
+            text-transform: uppercase;
+        }
+
+        /* Glass Card for Hints */
+        #hint-tray {
+            position: absolute;
+            bottom: 60px;
+            width: 100%;
+            display: flex;
+            justify-content: center;
+            z-index: 4;
+        }
+
+        .hint-card {
+            background: rgba(255, 255, 255, 0.05);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            padding: 20px 45px;
+            border-radius: 60px;
+            display: flex;
+            align-items: center;
+            gap: 25px;
+            font-weight: 700;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.3);
+        }
+
+        .hint-card span {
+            color: #4ade80; /* Success Green */
+            font-size: 18px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        .hint-desc {
+            font-size: 36px;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="background" style="background-image: url('{{artworkUrl}}');"></div>
+        <div id="overlay"></div>
+
+        <div id="content">
+            <span class="quote-icon">“</span>
+            <div class="lyrics">
+                {{#each lines}}
+                    <p>{{this}}</p>
+                {{/each}}
+            </div>
+            
+            <div class="brand">Lyric Labyrinth</div>
+        </div>
+
+        {{#if showHint}}
+        <div id="hint-tray">
+            <div class="hint-card">
+                <span>{{hintLabel}}</span>
+                <div class="hint-desc">{{hintValue}}</div>
+            </div>
+        </div>
+        {{/if}}
+    </div>
+</body>
+</html>

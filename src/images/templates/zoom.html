@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 800px;
+            height: 800px;
+            background: transparent;
+            overflow: hidden;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #container {
+            width: 800px;
+            height: 800px;
+            position: relative;
+            background: #111;
+            border-radius: 40px;
+            overflow: hidden;
+        }
+
+        canvas {
+            width: 100%;
+            height: 100%;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <canvas id="zoomCanvas" width="800" height="800"></canvas>
+    </div>
+    
+    <!-- Hidden source image for Puppeteer to detect and wait for -->
+    <img id="sourceImage" src="{{artworkUrl}}" style="display: none;">
+
+    <script>
+        const canvas = document.getElementById('zoomCanvas');
+        const ctx = canvas.getContext('2d');
+        const img = document.getElementById('sourceImage');
+        
+        // Data injected by Puppeteer
+        const centerX = parseFloat("{{centerX}}"); // 0 to 100
+        const centerY = parseFloat("{{centerY}}"); // 0 to 100
+        const scale = parseFloat("{{scale}}"); // e.g., 8 (8x zoom) to 1 (full view)
+
+        const draw = () => {
+            const cw = canvas.width;
+            const ch = canvas.height;
+            const iw = img.width;
+            const ih = img.height;
+
+            // Calculate source dimensions based on scale
+            // If scale is 8, the viewport is 1/8th of the image
+            const sw = iw / scale;
+            const sh = ih / scale;
+
+            // Calculate source top-left corner based on centerX/Y
+            // We want (centerX, centerY) to be the middle of our crop
+            let sx = (iw * (centerX / 100)) - (sw / 2);
+            let sy = (ih * (centerY / 100)) - (sh / 2);
+
+            // Constraint sx/sy so we don't go out of bounds
+            if (sx < 0) sx = 0;
+            if (sy < 0) sy = 0;
+            if (sx + sw > iw) sx = iw - sw;
+            if (sy + sh > ih) sy = ih - sh;
+
+            // Draw
+            ctx.drawImage(img, sx, sy, sw, sh, 0, 0, cw, ch);
+        };
+
+        if (img.complete) draw();
+        else img.onload = draw;
+    </script>
+</body>
+</html>
