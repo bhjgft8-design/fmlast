@@ -27,6 +27,7 @@ export interface GuildQueue {
     isPaused: boolean;
     currentProcess: any | null;
     consecutiveErrors: number;
+    isFallingBack?: boolean;
 }
 
 export class MusicPlayer {
@@ -218,7 +219,19 @@ export class MusicPlayer {
         }
 
         const track = queue.tracks[0];
-        if (!track.url) {
+        let streamUrl = track.url;
+        
+        if (queue.isFallingBack) {
+            // Consume the fallback flag so it doesn't loop
+            queue.isFallingBack = false;
+            const scQuery = track.artistName && track.trackTitle 
+                ? `${track.artistName} ${track.trackTitle}` 
+                : track.title;
+            streamUrl = `scsearch1:${scQuery}`;
+            queue.textChannel.send(`⚠️ **YouTube blocked this server's IP!** Rerouting audio through SoundCloud for \`${track.title}\`...`).catch(() => {});
+        }
+
+        if (!streamUrl) {
             queue.textChannel.send(`❌ Missing URL for: **${track.title}**`);
             this.onTrackEnd(guildId, true);
             return;
@@ -228,10 +241,10 @@ export class MusicPlayer {
             queue.isPlaying = true;
             let stderrBuffer = '';
 
-            console.log(`[MusicPlayer] 🎵 Piped Streaming (yt-dlp): ${track.url}`);
+            console.log(`[MusicPlayer] 🎵 Piped Streaming (yt-dlp): ${streamUrl}`);
 
             // Build yt-dlp args to bypass YouTube bot detection
-            const ytProcess = ytdlExec(track.url, {
+            const ytProcess = ytdlExec(streamUrl, {
                 output: '-',
                 format: 'bestaudio/best',
                 noCheckCertificates: true,
@@ -257,12 +270,21 @@ export class MusicPlayer {
                     .slice(0, 3).join('\n');
 
                 if (errorLines.includes('Sign in') || errorLines.includes('age') || errorLines.includes('unavailable')) {
-                    queue.textChannel.send(`⚠️ **Skipped**: \`${track.title}\` — This video is age-restricted or unavailable.`).catch(() => { });
+                    if (!streamUrl.startsWith('scsearch1:')) {
+                        // Mark for fallback. The pipe will close, triggering Idle, which calls onTrackEnd
+                        queue.isFallingBack = true;
+                        return; // Exit early to let onTrackEnd handle the fallback reboot
+                    } else {
+                        queue.textChannel.send(`⚠️ **Skipped**: \`${track.title}\` — Fallback stream is also unavailable.`).catch(() => { });
+                    }
                 } else if (!errorLines.includes('Errno 22')) {
                     // Only log real errors, ignore "unable to write data" (Errno 22) as it's just pipe cleanup
                     console.error('[MusicPlayer] yt-dlp failed (code 1):', errorLines || err.message);
-                    queue.textChannel.send(`⚠️ **Skipped**: \`${track.title}\` — Could not stream this track (YouTube blocked it).`).catch(() => { });
+                    queue.textChannel.send(`⚠️ **Skipped**: \`${track.title}\` — Could not stream this track.`).catch(() => { });
                 }
+                
+                // If we reach here, it's a hard error, ensure fallback is false
+                queue.isFallingBack = false;
                 this.onTrackEnd(guildId, true);
             });
 
@@ -364,6 +386,13 @@ export class MusicPlayer {
     private static onTrackEnd(guildId: string, error = false) {
         const queue = this.queues.get(guildId);
         if (queue) {
+            // Intercept fallback request
+            if (queue.isFallingBack) {
+                queue.isPlaying = false; // Reset playing state so processQueue executes
+                this.processQueue(guildId);
+                return;
+            }
+
             if (error) {
                 queue.consecutiveErrors++;
                 if (queue.consecutiveErrors >= 3) {
