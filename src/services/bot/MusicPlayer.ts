@@ -80,9 +80,10 @@ export class MusicPlayer {
                 isPlaying: false,
                 isPaused: false,
                 currentProcess: null,
-                consecutiveErrors: 0
+                consecutiveErrors: 0,
+                currentResource: null
             };
-            this.queues.set(guildId, queue);
+            MusicPlayer.queues.set(guildId, queue);
         }
         return queue!;
     }
