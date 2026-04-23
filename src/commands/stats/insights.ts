@@ -5,6 +5,7 @@ import { SlashCommandBuilder } from 'discord.js';
 import { ComponentsV2 } from '../../utils/ComponentsV2';
 import { OpenAiService } from '../../services/external/OpenAiService';
 import { parseArgs } from '../../utils/prefixParser';
+import { resolveTargetUser } from '../../utils/userResolver';
 
 export default class InsightsCommand extends BaseCommand {
     name = 'insights';
@@ -24,6 +25,9 @@ export default class InsightsCommand extends BaseCommand {
                     { name: 'Yearly', value: '12month' },
                     { name: 'Overall', value: 'overall' }
                 )
+        )
+        .addUserOption((opt: any) =>
+            opt.setName('user').setDescription('View another user\'s musical persona').setRequired(false)
         );
 
     async execute(interactionOrMessage: any, isSlash = false, args?: string[]): Promise<void> {
@@ -32,11 +36,15 @@ export default class InsightsCommand extends BaseCommand {
             try { interactionOrMessage.channel.sendTyping(); } catch {}
         }
 
-        const userId = isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id;
+        const targetUser = await resolveTargetUser(interactionOrMessage, isSlash);
+        const userId = targetUser.id;
         const dbUser = await prisma.user.findUnique({ where: { discordId: userId } });
 
         if (!dbUser?.lastfmUsername) {
-            const msg = '❌ Link your Last.fm account first using `/login`.';
+            const isSelf = userId === (isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id);
+            const msg = isSelf 
+                ? '❌ Link your Last.fm account first using `/login`.'
+                : `❌ **${targetUser.username}** is not linked to Last.fm yet.`;
             if (isSlash) await interactionOrMessage.editReply(msg);
             else await interactionOrMessage.channel.send(msg);
             return;
@@ -85,7 +93,7 @@ export default class InsightsCommand extends BaseCommand {
             );
 
             // 3. Build UI
-            const userObj = isSlash ? interactionOrMessage.user : interactionOrMessage.author;
+            const userObj = targetUser;
             const displayName = userObj.globalName || userObj.displayName || userObj.username;
 
             const periodLabels: Record<string, string> = {

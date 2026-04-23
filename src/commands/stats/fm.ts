@@ -10,6 +10,7 @@ import { triggerDeltaSync } from '../../services/bot/QueueWorker';
 import { PuppeteerService } from '../../services/external/PuppeteerService';
 import { RenderCacheService } from '../../services/bot/RenderCacheService';
 import { ChannelType } from 'discord.js';
+import { resolveTargetUser } from '../../utils/userResolver';
 
 const genius = new GeniusClient(config.GENIUS_ACCESS_TOKEN);
 
@@ -20,7 +21,12 @@ export default class FMCommand extends BaseCommand {
 
     slashData = new (require('discord.js').SlashCommandBuilder)()
         .setName('fm')
-        .setDescription('Show what you are currently listening to');
+        .setDescription('Show what you are currently listening to')
+        .addUserOption((opt: any) =>
+            opt.setName('user')
+                .setDescription('View another user\'s now playing')
+                .setRequired(false)
+        );
 
     async execute(interactionOrMessage: any, isSlash = false, args?: string[]): Promise<void> {
         if (!isSlash) {
@@ -29,14 +35,20 @@ export default class FMCommand extends BaseCommand {
             } catch (err) { }
         }
 
-        const userId = isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id;
+        const targetUser = await resolveTargetUser(interactionOrMessage, isSlash);
+        const userId = targetUser.id;
 
         const dbUser = await prisma.user.findUnique({ where: { discordId: userId } });
 
         if (!dbUser?.lastfmSessionKey || !dbUser.lastfmUsername) {
+            const isSelf = userId === (isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id);
+            const msg = isSelf 
+                ? '❌ You are not linked to Last.fm yet.\nRun `/login` or `!login` first!'
+                : `❌ **${targetUser.username}** is not linked to Last.fm yet.`;
+
             const payload = new ComponentsV2()
                 .setAccent(0xff0000)
-                .addText('❌ You are not linked to Last.fm yet.\nRun `/login` or `+login` first!')
+                .addText(msg)
                 .build();
 
             if (isSlash) await interactionOrMessage.reply({ ...payload, ephemeral: true });

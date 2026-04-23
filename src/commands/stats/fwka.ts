@@ -5,6 +5,7 @@ import { TextChannel } from 'discord.js';
 import { ComponentsV2 } from '../../utils/ComponentsV2';
 import { triggerDeltaSync } from '../../services/bot/QueueWorker';
 import { FriendService } from '../../services/bot/FriendService';
+import { resolveTargetUser } from '../../utils/userResolver';
 
 interface LocalUser {
     id: string;
@@ -21,24 +22,28 @@ export default class FriendWhoKnowsAlbumCommand extends BaseCommand {
     slashData = new (require('discord.js').SlashCommandBuilder)()
         .setName('fwka')
         .setDescription('Find out who listens to an album the most among your friends')
-        .addStringOption((o: any) => o.setName('query').setDescription('Album name (or "album by artist")').setRequired(false));
+        .addStringOption((o: any) => o.setName('query').setDescription('Album name (or "album by artist")').setRequired(false))
+        .addUserOption((o: any) => o.setName('user').setDescription('Target user').setRequired(false));
 
     async execute(interactionOrMessage: any, isSlash = false, args?: string[]): Promise<void> {
         let searchQuery = args?.join(' ') || '';
 
-        if (isSlash) {
-            searchQuery = interactionOrMessage.options.getString('query') || '';
-            await interactionOrMessage.deferReply();
-        } else {
-            try { if (interactionOrMessage.channel) (interactionOrMessage.channel as TextChannel).sendTyping(); } catch {}
+        const targetUser = await resolveTargetUser(interactionOrMessage, isSlash);
+        const userId = targetUser.id;
+        const authorId = isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id;
+        
+        // Remove mention from searchQuery if it was a message
+        if (!isSlash && searchQuery) {
+            searchQuery = searchQuery.replace(/<@!?\d+>/g, '').trim();
         }
 
-        const authorId = isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id;
-
-        const dbUser = await prisma.user.findUnique({ where: { discordId: authorId } });
+        const dbUser = await prisma.user.findUnique({ where: { discordId: userId } });
         if (!dbUser || !dbUser.lastfmUsername) {
-            const reply = '❌ You must link your Last.fm account first! Use `/login`.';
-            return isSlash ? interactionOrMessage.editReply(reply) : interactionOrMessage.reply(reply);
+            const isSelf = userId === authorId;
+            const msg = isSelf 
+                ? '❌ You must link your Last.fm account first! Use `/login`.'
+                : `❌ **${targetUser.username}** is not linked to Last.fm yet.`;
+            return isSlash ? interactionOrMessage.editReply(msg) : interactionOrMessage.reply(msg);
         }
 
         triggerDeltaSync(authorId);
@@ -99,7 +104,7 @@ export default class FriendWhoKnowsAlbumCommand extends BaseCommand {
             return isSlash ? interactionOrMessage.editReply(reply) : interactionOrMessage.reply(reply);
         }
 
-        const friends = await FriendService.getFriends(authorId);
+        const friends = await FriendService.getFriends(userId);
         const friendUserIds = friends.map((f: any) => f.id);
         friendUserIds.push(dbUser.id);
 
@@ -163,7 +168,7 @@ export default class FriendWhoKnowsAlbumCommand extends BaseCommand {
         const titleDisplay = artistName ? `${albumName} by ${artistName}` : albumName;
         const fmLink = artistName ? `https://www.last.fm/music/${encodeURIComponent(artistName)}/${encodeURIComponent(albumName)}` : `https://www.last.fm/search?q=${encodeURIComponent(albumName)}`;
         
-        let content = `### [${titleDisplay} among Friends](${fmLink})\n${topDesc}`;
+        let content = `### [${titleDisplay} among ${targetUser.username}'s Friends](${fmLink})\n${topDesc}`;
         
         const builder = new ComponentsV2()
             .setAccent(0xffb84d);

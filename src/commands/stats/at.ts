@@ -3,6 +3,7 @@ import { prisma } from '../../database/client';
 import { SlashCommandBuilder } from 'discord.js';
 import { ComponentsV2 } from '../../utils/ComponentsV2';
 import { LastFM } from '../../services/api/LastFM';
+import { resolveTargetUser } from '../../utils/userResolver';
 
 export default class ArtistTopTracksCommand extends BaseCommand {
     name = 'at';
@@ -16,15 +17,21 @@ export default class ArtistTopTracksCommand extends BaseCommand {
             option.setName('artist')
                 .setDescription('The artist name')
                 .setRequired(true)
+        )
+        .addUserOption(option =>
+            option.setName('user')
+                .setDescription('View another user\'s artist top tracks')
+                .setRequired(false)
         );
 
     async execute(interactionOrMessage: any, isSlash = false, args: string[] = []): Promise<void> {
         const isPrefix = !isSlash;
         if (!isPrefix && !interactionOrMessage.deferred) await interactionOrMessage.deferReply();
 
-        let artistQuery = isSlash ? interactionOrMessage.options.getString('artist') : args.join(' ');
-        const userId = isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id;
-        const userObj = isSlash ? interactionOrMessage.user : interactionOrMessage.author;
+        const targetUser = await resolveTargetUser(interactionOrMessage, isSlash);
+        const userId = targetUser.id;
+        const userObj = targetUser;
+        let artistQuery = isSlash ? interactionOrMessage.options.getString('artist') : args.join(' ').replace(/<@!?\d+>/g, '').trim();
 
         if (!artistQuery) {
             // Find current playing artist
@@ -49,7 +56,10 @@ export default class ArtistTopTracksCommand extends BaseCommand {
         try {
             const dbUser = await prisma.user.findUnique({ where: { discordId: userId } });
             if (!dbUser) {
-                const msg = '❌ You must be logged in to use this command.';
+                const isSelf = userId === (isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id);
+                const msg = isSelf 
+                    ? '❌ You are not linked to Last.fm yet.\nRun `/login` or `!login` first!'
+                    : `❌ **${targetUser.username}** is not linked to Last.fm yet.`;
                 if (isSlash) await interactionOrMessage.editReply(msg);
                 else await interactionOrMessage.reply(msg);
                 return;

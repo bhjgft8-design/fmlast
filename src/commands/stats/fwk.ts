@@ -6,6 +6,7 @@ import { ComponentsV2 } from '../../utils/ComponentsV2';
 import { triggerDeltaSync } from '../../services/bot/QueueWorker';
 import { FriendService } from '../../services/bot/FriendService';
 import { TrackResolverService } from '../../services/api/TrackResolverService';
+import { resolveTargetUser } from '../../utils/userResolver';
 
 interface LocalUser {
     id: string;
@@ -22,24 +23,28 @@ export default class FriendWhoKnowsCommand extends BaseCommand {
     slashData = new (require('discord.js').SlashCommandBuilder)()
         .setName('fwk')
         .setDescription('Find out who listens to an artist the most among your friends')
-        .addStringOption((o: any) => o.setName('artist').setDescription('Artist name to search').setRequired(false));
+        .addStringOption((o: any) => o.setName('artist').setDescription('Artist name to search').setRequired(false))
+        .addUserOption((o: any) => o.setName('user').setDescription('Target user').setRequired(false));
 
     async execute(interactionOrMessage: any, isSlash = false, args?: string[]): Promise<void> {
         let artistName = args?.join(' ') || '';
 
-        if (isSlash) {
-            artistName = interactionOrMessage.options.getString('artist') || '';
-            await interactionOrMessage.deferReply();
-        } else {
-            try { if (interactionOrMessage.channel) (interactionOrMessage.channel as TextChannel).sendTyping(); } catch {}
+        const targetUser = await resolveTargetUser(interactionOrMessage, isSlash);
+        const userId = targetUser.id;
+        const authorId = isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id;
+        
+        // Remove mention from artistName if it was a message
+        if (!isSlash && artistName) {
+            artistName = artistName.replace(/<@!?\d+>/g, '').trim();
         }
 
-        const authorId = isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id;
-
-        const dbUser = await prisma.user.findUnique({ where: { discordId: authorId } });
+        const dbUser = await prisma.user.findUnique({ where: { discordId: userId } });
         if (!dbUser || !dbUser.lastfmUsername) {
-            const reply = '❌ You must link your Last.fm account first! Use `/login`.';
-            return isSlash ? interactionOrMessage.editReply(reply) : interactionOrMessage.reply(reply);
+            const isSelf = userId === authorId;
+            const msg = isSelf 
+                ? '❌ You must link your Last.fm account first! Use `/login`.'
+                : `❌ **${targetUser.username}** is not linked to Last.fm yet.`;
+            return isSlash ? interactionOrMessage.editReply(msg) : interactionOrMessage.reply(msg);
         }
 
         // Fire & Forget: Background sync
@@ -62,9 +67,9 @@ export default class FriendWhoKnowsCommand extends BaseCommand {
             return isSlash ? interactionOrMessage.editReply(reply) : interactionOrMessage.reply(reply);
         }
 
-        const friends = await FriendService.getFriends(authorId);
+        const friends = await FriendService.getFriends(userId);
         const friendUserIds = friends.map((f: any) => f.id);
-        friendUserIds.push(dbUser.id); // Include the author
+        friendUserIds.push(dbUser.id); // Include the target user
 
         const localResults = await prisma.userArtist.findMany({
             where: { 
@@ -104,14 +109,14 @@ export default class FriendWhoKnowsCommand extends BaseCommand {
         let topDesc = '';
         for (let i = 0; i < localUsers.length; i++) {
             const u = localUsers[i];
-            const isMe = u.discordId === authorId;
+            const isMe = u.discordId === authorId; // Highlight the command executor
             const prefix = isMe ? '🔥' : `${i + 1}.`;
             const spacing = isMe ? '\u200A\u2005' : '\u2004\u2005';
             
             topDesc += `\u2005${prefix}${spacing}**[${u.displayName}](https://last.fm/user/${encodeURIComponent(u.lastfmUsername!)})\u200E** - **${u.playcount}** plays\n`;
         }
 
-        let content = `### [${artistName} among Friends](https://www.last.fm/music/${encodeURIComponent(artistName)})\n${topDesc}`;
+        let content = `### [${artistName} among ${targetUser.username}'s Friends](https://www.last.fm/music/${encodeURIComponent(artistName)})\n${topDesc}`;
         
         if (tagsText) {
             content += `\n-# *${tagsText}*`;

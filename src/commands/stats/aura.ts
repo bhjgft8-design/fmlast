@@ -13,6 +13,7 @@ import { createAuraVideo, tempDir } from '../../utils/downloader';
 import { PuppeteerService } from '../../services/external/PuppeteerService';
 import fsp from 'fs/promises';
 import path from 'path';
+import { resolveTargetUser } from '../../utils/userResolver';
 
 
 // Per-user cover history: userId → Set of cover URLs already shown
@@ -38,6 +39,9 @@ export default class AuraCommand extends BaseCommand {
         )
         .addStringOption((opt: any) =>
             opt.setName('cover').setDescription('Custom album or track name for the background (e.g. "who really cares by tv girl")').setRequired(false)
+        )
+        .addUserOption((opt: any) =>
+            opt.setName('user').setDescription('View another user\'s musical aura').setRequired(false)
         );
 
     async execute(interactionOrMessage: any, isSlash = false, args?: string[]): Promise<void> {
@@ -47,11 +51,16 @@ export default class AuraCommand extends BaseCommand {
             } catch (err) { }
         }
 
-        const userId = isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id;
+        const targetUser = await resolveTargetUser(interactionOrMessage, isSlash);
+        const userId = targetUser.id;
         const dbUser = await prisma.user.findUnique({ where: { discordId: userId } });
 
         if (!dbUser?.lastfmUsername) {
-            const msg = '❌ Link your Last.fm account first using `/login`.';
+            const isSelf = userId === (isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id);
+            const msg = isSelf 
+                ? '❌ You are not linked to Last.fm yet.\nRun `/login` or `+login` first!'
+                : `❌ **${targetUser.username}** is not linked to Last.fm yet.`;
+            
             if (isSlash) {
                 await interactionOrMessage.reply({ content: msg, ephemeral: true });
             } else {
@@ -318,7 +327,7 @@ export default class AuraCommand extends BaseCommand {
                 .map(([tag]) => tag.toUpperCase());
 
             // 5. Render via Puppeteer
-            const userObj = isSlash ? interactionOrMessage.user : interactionOrMessage.author;
+            const userObj = targetUser;
             const avatarUrl = userObj.displayAvatarURL({ extension: 'png', size: 256 });
 
             const templateData = {

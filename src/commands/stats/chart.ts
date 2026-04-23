@@ -13,6 +13,7 @@ import axios from 'axios';
 import { ComponentsV2 } from '../../utils/ComponentsV2';
 import { PuppeteerService } from '../../services/external/PuppeteerService';
 import { TrackResolverService } from '../../services/api/TrackResolverService';
+import { resolveTargetUser } from '../../utils/userResolver';
 
 // ==================== OPTIONS INTERFACE ====================
 export interface ChartOptions {
@@ -100,6 +101,11 @@ export default class ChartCommand extends BaseCommand {
                 .setMinValue(1)
                 .setMaxValue(9)
                 .setRequired(false)
+        )
+        .addUserOption((opt: any) =>
+            opt.setName('user')
+                .setDescription('View another user\'s chart')
+                .setRequired(false)
         );
 
     async execute(interactionOrMessage: any, isSlash = false, args?: string[]): Promise<void> {
@@ -107,7 +113,8 @@ export default class ChartCommand extends BaseCommand {
             try { (interactionOrMessage.channel as TextChannel).sendTyping(); } catch (err) { }
         }
 
-        const userId = isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id;
+        const targetUser = await resolveTargetUser(interactionOrMessage, isSlash);
+        const userId = targetUser.id;
         let periodInput = 'weekly';
         let gridSize = 3;
 
@@ -136,7 +143,12 @@ export default class ChartCommand extends BaseCommand {
 
         const dbUser = await prisma.user.findUnique({ where: { discordId: userId } });
         if (!dbUser?.lastfmSessionKey || !dbUser.lastfmUsername) {
-            const payload = new ComponentsV2().setAccent(0xff0000).addText('❌ You are not linked to Last.fm yet.\nRun `/login` or `!login` first!').build();
+            const isSelf = userId === (isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id);
+            const msg = isSelf 
+                ? '❌ You are not linked to Last.fm yet.\nRun `/login` or `!login` first!'
+                : `❌ **${targetUser.username}** is not linked to Last.fm yet.`;
+            
+            const payload = new ComponentsV2().setAccent(0xff0000).addText(msg).build();
             if (isSlash) await interactionOrMessage.reply({ ...payload, ephemeral: true });
             else await interactionOrMessage.channel.send(payload);
             return;

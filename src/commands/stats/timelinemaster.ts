@@ -5,6 +5,7 @@ import { GameManager } from '../../utils/gameManager';
 import { ComponentsV2 } from '../../utils/ComponentsV2';
 import { PuppeteerService } from '../../services/external/PuppeteerService';
 import { TrackResolverService } from '../../services/api/TrackResolverService';
+import { resolveTargetUser } from '../../utils/userResolver';
 
 export default class TimelineMasterCommand extends BaseCommand {
     name = 'timelinemaster';
@@ -13,21 +14,22 @@ export default class TimelineMasterCommand extends BaseCommand {
 
     slashData = new SlashCommandBuilder()
         .setName('timelinemaster')
-        .setDescription('Sort 3 albums from your library by release year! 🗓️');
+        .setDescription('Sort 3 albums from your library by release year! 🗓️')
+        .addUserOption((opt: any) =>
+            opt.setName('user').setDescription('Use another user\'s library for the game').setRequired(false)
+        );
 
     async execute(interactionOrMessage: any, isSlash = false): Promise<void> {
         const channel = interactionOrMessage.channel as TextChannel;
-        const userId = isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id;
+        const targetUser = await resolveTargetUser(interactionOrMessage, isSlash);
+        const targetUserId = targetUser.id;
 
-        if (GameManager.isGameActive(channel.id)) {
-            const msg = '⚠️ A game is already active!';
-            isSlash ? await interactionOrMessage.reply({ content: msg, ephemeral: true }) : await interactionOrMessage.channel.send(msg);
-            return;
-        }
-
-        const dbUser = await prisma.user.findUnique({ where: { discordId: userId } });
+        const dbUser = await prisma.user.findUnique({ where: { discordId: targetUserId } });
         if (!dbUser?.lastfmUsername) {
-            const msg = '❌ Link your Last.fm account first using `/login`.';
+            const isSelf = targetUserId === (isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id);
+            const msg = isSelf 
+                ? '❌ Link your Last.fm account first using `/login`.'
+                : `❌ **${targetUser.username}** is not linked to Last.fm yet.`;
             isSlash ? await interactionOrMessage.reply({ content: msg, ephemeral: true }) : await interactionOrMessage.channel.send(msg);
             return;
         }
@@ -35,7 +37,7 @@ export default class TimelineMasterCommand extends BaseCommand {
         if (isSlash) await interactionOrMessage.deferReply();
         else { try { channel.sendTyping(); } catch { } }
 
-        await this.runGame(interactionOrMessage, isSlash, userId, channel);
+        await this.runGame(interactionOrMessage, isSlash, targetUserId, channel);
     }
 
     private async runGame(interactionOrMessage: any, isSlash: boolean, discordId: string, channel: TextChannel): Promise<void> {

@@ -9,6 +9,7 @@ import { config } from '../../../config';
 import axios from 'axios';
 import { ComponentsV2 } from '../../utils/ComponentsV2';
 import { PuppeteerService } from '../../services/external/PuppeteerService';
+import { resolveTargetUser } from '../../utils/userResolver';
 
 // ═══════════════════════════════════════════════════════
 // TYPES
@@ -93,6 +94,9 @@ export default class TimelineCommand extends BaseCommand {
                     { name: 'Yearly (default)', value: 'yearly' },
                     { name: 'Monthly (recent 6 months)', value: 'monthly' }
                 )
+        )
+        .addUserOption((opt: any) =>
+            opt.setName('user').setDescription('View another user\'s music timeline').setRequired(false)
         );
 
     async execute(interactionOrMessage: any, isSlash = false, args?: string[]): Promise<void> {
@@ -100,7 +104,8 @@ export default class TimelineCommand extends BaseCommand {
             try { (interactionOrMessage.channel as TextChannel).sendTyping(); } catch { }
         }
 
-        const userId = isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id;
+        const targetUser = await resolveTargetUser(interactionOrMessage, isSlash);
+        const userId = targetUser.id;
 
         let view = 'yearly';
         if (isSlash) {
@@ -112,8 +117,11 @@ export default class TimelineCommand extends BaseCommand {
 
         const dbUser = await prisma.user.findUnique({ where: { discordId: userId } });
         if (!dbUser?.lastfmUsername || !dbUser?.lastfmSessionKey) {
-            return this.replyError(interactionOrMessage, isSlash,
-                '❌ You are not linked to Last.fm yet.\nRun `/login` or `+login` first!');
+            const isSelf = userId === (isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id);
+            const msg = isSelf 
+                ? '❌ You are not linked to Last.fm yet.\nRun `/login` or `+login` first!'
+                : `❌ **${targetUser.username}** is not linked to Last.fm yet.`;
+            return this.replyError(interactionOrMessage, isSlash, msg);
         }
 
         if (isSlash) await interactionOrMessage.deferReply();
@@ -329,7 +337,7 @@ export default class TimelineCommand extends BaseCommand {
             const width = PADDING * 2 + totalCols * CARD_W + (totalCols - 1) * GAP + 80; // Extra side padding
             const height = HEADER_H + 400 + FOOTER_H; // Fixed height approx
 
-            const userObjA = isSlash ? interactionOrMessage.user : interactionOrMessage.author;
+            const userObjA = targetUser;
             const avatarUrl = userObjA.displayAvatarURL({ extension: 'png', size: 128 });
 
             const templateData = {
