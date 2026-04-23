@@ -274,8 +274,9 @@ export class MusicPlayer {
             queue.isPlaying = true;
             let stderrBuffer = '';
 
-            console.log(`[MusicPlayer] 🎵 Playing: ${track.title} (Cookies Only)`);
+            console.log(`[MusicPlayer] 🎵 Playing: ${track.title} (Hybrid Engine: old-flags + cookies)`);
 
+            // Combined logic: Old-school bypass flags + Modern Cookies + bestaudio*
             const ytdlArgs: any = {
                 output: '-',
                 format: 'bestaudio*',
@@ -283,7 +284,8 @@ export class MusicPlayer {
                 noWarnings: true,
                 noPlaylist: true,
                 rmCacheDir: true,
-                ageLimit: 99,
+                youtubeSkipDashManifest: true,
+                preferFreeFormats: true,
                 addHeader: [
                     'referer:youtube.com',
                     'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
@@ -301,22 +303,22 @@ export class MusicPlayer {
                 if (err.signal === 'SIGTERM' || err.message?.includes('SIGTERM')) return;
                 const fullError = (err.stderr || stderrBuffer || err.message || '').toLowerCase();
 
-                if (fullError.includes('sign in') || fullError.includes('age') || fullError.includes('format')) {
+                if (fullError.includes('sign in') || fullError.includes('age') || fullError.includes('unavailable')) {
                     if (!streamUrl.startsWith('scsearch1:')) {
-                        console.log(`[MusicPlayer] 🔄 YouTube block detected. Attempting silent fallback...`);
+                        console.log(`[MusicPlayer] 🔄 YouTube block. Silent fallback triggered.`);
                         queue.isFallingBack = true;
                         if (queue.currentProcess === ytProcess) {
                             queue.currentProcess = null;
-                            this.onTrackEnd(guildId);
+                            MusicPlayer.onTrackEnd(guildId);
                         }
                         return;
                     }
                 }
 
                 if (queue.currentProcess === ytProcess) {
-                    console.error('[MusicPlayer] Playback failed:', fullError.substring(0, 150));
+                    console.error('[MusicPlayer] Stream failed:', fullError.substring(0, 150));
                     queue.currentProcess = null;
-                    this.onTrackEnd(guildId, true);
+                    MusicPlayer.onTrackEnd(guildId, true);
                 }
             });
 
@@ -341,8 +343,8 @@ export class MusicPlayer {
             }
 
         } catch (err: any) {
-            console.error(`[MusicPlayer] Critical error:`, err);
-            this.onTrackEnd(guildId, true);
+            console.error(`[MusicPlayer] Critical Error:`, err);
+            MusicPlayer.onTrackEnd(guildId, true);
         }
     }
 
@@ -386,15 +388,15 @@ export class MusicPlayer {
 
         if (queue.isFallingBack) {
             queue.isPlaying = false;
-            this.processQueue(guildId);
+            MusicPlayer.processQueue(guildId);
             return;
         }
 
         if (error) {
             queue.consecutiveErrors++;
             if (queue.consecutiveErrors >= 3) {
-                queue.textChannel.send('🛑 **Stopping** — Too many errors.');
-                this.stop(guildId);
+                queue.textChannel.send('🛑 **Stopping playback** — Too many consecutive errors.');
+                MusicPlayer.stop(guildId);
                 return;
             }
         } else {
@@ -402,6 +404,6 @@ export class MusicPlayer {
         }
 
         queue.tracks.shift();
-        this.processQueue(guildId);
+        MusicPlayer.processQueue(guildId);
     }
 }
