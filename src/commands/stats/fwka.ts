@@ -6,6 +6,7 @@ import { ComponentsV2 } from '../../utils/ComponentsV2';
 import { triggerDeltaSync } from '../../services/bot/QueueWorker';
 import { FriendService } from '../../services/bot/FriendService';
 import { resolveTargetUser } from '../../utils/userResolver';
+import { TrackResolverService } from '../../services/api/TrackResolverService';
 
 interface LocalUser {
     id: string;
@@ -27,6 +28,8 @@ export default class FriendWhoKnowsAlbumCommand extends BaseCommand {
 
     async execute(interactionOrMessage: any, isSlash = false, args?: string[]): Promise<void> {
         let searchQuery = args?.join(' ') || '';
+        let artistName = '';
+        let albumName = '';
 
         const targetUser = await resolveTargetUser(interactionOrMessage, isSlash);
         const userId = targetUser.id;
@@ -35,6 +38,16 @@ export default class FriendWhoKnowsAlbumCommand extends BaseCommand {
         // Remove mention from searchQuery if it was a message
         if (!isSlash && searchQuery) {
             searchQuery = searchQuery.replace(/<@!?\d+>/g, '').trim();
+
+            // Check for streaming links
+            if (searchQuery.startsWith('http')) {
+                const resolved = await TrackResolverService.parseStreamingLink(searchQuery);
+                if (resolved) {
+                    artistName = resolved.artist;
+                    albumName = resolved.track;
+                    searchQuery = ''; // Skip manual parsing logic below
+                }
+            }
         }
 
         const dbUser = await prisma.user.findUnique({ where: { discordId: userId } });
@@ -48,10 +61,9 @@ export default class FriendWhoKnowsAlbumCommand extends BaseCommand {
 
         triggerDeltaSync(authorId);
 
-        let artistName = '';
-        let albumName = '';
-
-        if (!searchQuery) {
+        if (artistName && albumName) {
+            // Already resolved from link, skip Last.fm search
+        } else if (!searchQuery) {
             try {
                 const tracks = await LastFM.getRecentTracks(dbUser.lastfmUsername, 1, dbUser.lastfmSessionKey);
                 if (tracks.length > 0) {
@@ -151,16 +163,21 @@ export default class FriendWhoKnowsAlbumCommand extends BaseCommand {
 
         if (localUsers.length === 0) {
             const titleStr = artistName ? `${albumName} by ${artistName}` : albumName;
-            const reply = `None of your friends know **${titleStr}**.`;
-            return isSlash ? interactionOrMessage.editReply(reply) : interactionOrMessage.reply(reply);
+            const builder = new ComponentsV2()
+                .addText(`### [${titleStr} among ${targetUser.displayName || targetUser.username}'s Friends](https://www.last.fm/music/${encodeURIComponent(artistName)}/${encodeURIComponent(albumName)})\n\n\u20051.\u2004\u2005**[${targetUser.displayName || targetUser.username}](https://last.fm/user/${encodeURIComponent(dbUser.lastfmUsername!)})\u200E** - **0** plays`);
+            
+            if (thumbnail) builder.addThumbnail(thumbnail);
+            
+            const payload = builder.build();
+            return isSlash ? interactionOrMessage.editReply(payload) : interactionOrMessage.reply(payload);
         }
 
         let topDesc = '';
         for (let i = 0; i < localUsers.length; i++) {
             const u = localUsers[i];
             const isMe = u.discordId === authorId;
-            const prefix = isMe ? '🔥' : `${i + 1}.`;
-            const spacing = isMe ? '\u200A\u2005' : '\u2004\u2005';
+            const prefix = `${i + 1}.`;
+            const spacing = '\u2004\u2005';
             
             topDesc += `\u2005${prefix}${spacing}**[${u.displayName}](https://last.fm/user/${encodeURIComponent(u.lastfmUsername!)})\u200E** - **${u.playcount}** plays\n`;
         }
@@ -168,7 +185,7 @@ export default class FriendWhoKnowsAlbumCommand extends BaseCommand {
         const titleDisplay = artistName ? `${albumName} by ${artistName}` : albumName;
         const fmLink = artistName ? `https://www.last.fm/music/${encodeURIComponent(artistName)}/${encodeURIComponent(albumName)}` : `https://www.last.fm/search?q=${encodeURIComponent(albumName)}`;
         
-        let content = `### [${titleDisplay} among ${targetUser.username}'s Friends](${fmLink})\n${topDesc}`;
+        let content = `### [${titleDisplay} among ${targetUser.displayName || targetUser.username}'s Friends](${fmLink})\n${topDesc}`;
         
         const builder = new ComponentsV2()
             .setAccent(0xffb84d);

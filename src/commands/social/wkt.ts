@@ -6,6 +6,7 @@ import { ComponentsV2 } from '../../utils/ComponentsV2';
 import { triggerDeltaSync } from '../../services/bot/QueueWorker';
 import { config } from '../../../config';
 import { resolveTargetUser } from '../../utils/userResolver';
+import { TrackResolverService } from '../../services/api/TrackResolverService';
 
 interface LocalUser {
     id: string;
@@ -27,6 +28,8 @@ export default class WhoKnowsTrackCommand extends BaseCommand {
 
     async execute(interactionOrMessage: any, isSlash = false, args?: string[]): Promise<void> {
         let searchQuery = args?.join(' ') || '';
+        let artistName = '';
+        let trackName = '';
 
         const targetUser = await resolveTargetUser(interactionOrMessage, isSlash);
         const targetUserId = targetUser.id;
@@ -34,6 +37,16 @@ export default class WhoKnowsTrackCommand extends BaseCommand {
         // Remove mention from searchQuery if it was a message
         if (!isSlash && searchQuery) {
             searchQuery = searchQuery.replace(/<@!?\d+>/g, '').trim();
+
+            // Check for streaming links
+            if (searchQuery.startsWith('http')) {
+                const resolved = await TrackResolverService.parseStreamingLink(searchQuery);
+                if (resolved) {
+                    artistName = resolved.artist;
+                    trackName = resolved.track;
+                    searchQuery = ''; // Skip manual parsing logic below
+                }
+            }
         }
 
         const authorId = isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id;
@@ -57,10 +70,9 @@ export default class WhoKnowsTrackCommand extends BaseCommand {
         // Fire & Forget background sync
         triggerDeltaSync(targetUserId);
 
-        let artistName = '';
-        let trackName = '';
-
-        if (!searchQuery) {
+        if (artistName && trackName) {
+            // Already resolved from link, skip Last.fm search
+        } else if (!searchQuery) {
             try {
                 const tracks = await LastFM.getRecentTracks(dbUser.lastfmUsername, 1, dbUser.lastfmSessionKey);
                 if (tracks.length > 0) {
@@ -184,8 +196,13 @@ export default class WhoKnowsTrackCommand extends BaseCommand {
 
         if (localUsers.length === 0) {
             const titleStr = artistName ? `${trackName} by ${artistName}` : trackName;
-            const reply = `Nobody knows **${titleStr}**.`;
-            return isSlash ? interactionOrMessage.editReply(reply) : interactionOrMessage.reply(reply);
+            const builder = new ComponentsV2()
+                .addText(`### [${titleStr} in ${interactionOrMessage.guild?.name || 'this server'}](https://www.last.fm/music/${encodeURIComponent(artistName)}/_/${encodeURIComponent(trackName)})\n\n\u20051.\u2004\u2005**[${targetUser.displayName || targetUser.username}](https://last.fm/user/${encodeURIComponent(dbUser.lastfmUsername!)})\u200E** - **0** plays`);
+            
+            if (thumbnail) builder.addThumbnail(thumbnail);
+            
+            const payload = builder.build();
+            return isSlash ? interactionOrMessage.editReply(payload) : interactionOrMessage.reply(payload);
         }
 
         localUsers.sort((a, b) => b.playcount - a.playcount);

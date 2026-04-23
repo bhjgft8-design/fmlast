@@ -36,6 +36,14 @@ export default class FriendWhoKnowsCommand extends BaseCommand {
         // Remove mention from artistName if it was a message
         if (!isSlash && artistName) {
             artistName = artistName.replace(/<@!?\d+>/g, '').trim();
+
+            // Check for streaming links
+            if (artistName.startsWith('http')) {
+                const resolved = await TrackResolverService.parseStreamingLink(artistName);
+                if (resolved) {
+                    artistName = resolved.artist;
+                }
+            }
         }
 
         const dbUser = await prisma.user.findUnique({ where: { discordId: userId } });
@@ -102,21 +110,27 @@ export default class FriendWhoKnowsCommand extends BaseCommand {
         const tagsText = resolved.tags.filter(n => n.toLowerCase() !== 'seen live').slice(0, 4).join(' - ').toLowerCase();
 
         if (localUsers.length === 0) {
-            const reply = `None of your friends know **${artistName}**.`;
-            return isSlash ? interactionOrMessage.editReply(reply) : interactionOrMessage.reply(reply);
+            const builder = new ComponentsV2()
+                .addText(`### [${artistName} among ${targetUser.displayName || targetUser.username}'s Friends](https://www.last.fm/music/${encodeURIComponent(artistName)})\n\n\u20051.\u2004\u2005**[${targetUser.displayName || targetUser.username}](https://last.fm/user/${encodeURIComponent(dbUser.lastfmUsername!)})\u200E** - **0** plays`);
+            
+            if (thumbnail) builder.addThumbnail(thumbnail);
+            if (tagsText) builder.addFooter(tagsText);
+
+            const payload = builder.build();
+            return isSlash ? interactionOrMessage.editReply(payload) : interactionOrMessage.reply(payload);
         }
 
         let topDesc = '';
         for (let i = 0; i < localUsers.length; i++) {
             const u = localUsers[i];
             const isMe = u.discordId === authorId; // Highlight the command executor
-            const prefix = isMe ? '🔥' : `${i + 1}.`;
-            const spacing = isMe ? '\u200A\u2005' : '\u2004\u2005';
+            const prefix = `${i + 1}.`;
+            const spacing = '\u2004\u2005';
             
             topDesc += `\u2005${prefix}${spacing}**[${u.displayName}](https://last.fm/user/${encodeURIComponent(u.lastfmUsername!)})\u200E** - **${u.playcount}** plays\n`;
         }
 
-        let content = `### [${artistName} among ${targetUser.username}'s Friends](https://www.last.fm/music/${encodeURIComponent(artistName)})\n${topDesc}`;
+        let content = `### [${artistName} among ${targetUser.displayName || targetUser.username}'s Friends](https://www.last.fm/music/${encodeURIComponent(artistName)})\n${topDesc}`;
         
         if (tagsText) {
             content += `\n-# *${tagsText}*`;

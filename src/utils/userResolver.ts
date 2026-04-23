@@ -11,12 +11,20 @@ export async function resolveTargetUser(interactionOrMessage: any, isSlash: bool
         const userOption = interactionOrMessage.options.getUser('user');
         return userOption || interactionOrMessage.user;
     } else {
-        // Message commands: check mentions
-        const mention = interactionOrMessage.mentions?.users?.first();
-        if (mention) return mention;
+        // Message commands: check for mentions in the message content
+        // We filter out the user if the only reason they are mentioned is a reply.
+        // mentions.users contains both text-mentions and the user being replied to.
+        const mentions = interactionOrMessage.mentions;
+        const firstMention = mentions?.users?.first();
 
-        // Message commands: check if an ID or username was provided?
-        // For now, sticking to mentions to keep it simple and safe.
+        if (firstMention) {
+            // Check if the user's ID is actually present in the message text as a mention
+            const mentionRegex = new RegExp(`<@!?${firstMention.id}>`);
+            if (mentionRegex.test(interactionOrMessage.content)) {
+                return firstMention;
+            }
+        }
+
         return interactionOrMessage.author;
     }
 }

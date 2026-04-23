@@ -55,14 +55,42 @@ export class ComponentsV2 {
     /** 
      * Add a small thumbnail (Type 11) to the right of text content
      */
-    addThumbnail(url: string, content: string): this {
-        this.payload.components.push({
-            type: 9,
-            components: [{ type: 10, content }],
-            accessory: {
-                type: 11,
-                media: { url }
+    addThumbnail(url: string, content?: string): this {
+        if (content) {
+            this.payload.components.push({
+                type: 9,
+                components: [{ type: 10, content }],
+                accessory: {
+                    type: 11,
+                    media: { url }
+                }
+            });
+        } else {
+            // If no content, we use the last text block if available, 
+            // or just add it as a new section with empty space
+            const last = this.payload.components[this.payload.components.length - 1];
+            if (last && last.type === 10) {
+                this.payload.components[this.payload.components.length - 1] = {
+                    type: 9,
+                    components: [last],
+                    accessory: { type: 11, media: { url } }
+                };
+            } else {
+                this.payload.components.push({
+                    type: 9,
+                    components: [{ type: 10, content: '\u200B' }],
+                    accessory: { type: 11, media: { url } }
+                });
             }
+        }
+        return this;
+    }
+
+    /** Add small dimmed text at the bottom */
+    addFooter(text: string): this {
+        this.payload.components.push({
+            type: 10,
+            content: `-# *${text}*`
         });
         return this;
     }

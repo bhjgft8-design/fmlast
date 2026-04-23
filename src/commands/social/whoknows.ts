@@ -8,6 +8,7 @@ import { triggerDeltaSync } from '../../services/bot/QueueWorker';
 import { CrownService } from '../../services/bot/CrownService';
 import { config } from '../../../config';
 import { resolveTargetUser } from '../../utils/userResolver';
+import { TrackResolverService } from '../../services/api/TrackResolverService';
 
 interface LocalUser {
     id: string;
@@ -44,6 +45,14 @@ export default class WhoKnowsCommand extends BaseCommand {
         // Remove mention from artistName if it was a message
         if (!isSlash && artistName) {
             artistName = artistName.replace(/<@!?\d+>/g, '').trim();
+
+            // Check for streaming links
+            if (artistName.startsWith('http')) {
+                const resolved = await TrackResolverService.parseStreamingLink(artistName);
+                if (resolved) {
+                    artistName = resolved.artist;
+                }
+            }
         }
 
         const authorId = isSlash ? interactionOrMessage.user.id : interactionOrMessage.author.id;
@@ -68,7 +77,9 @@ export default class WhoKnowsCommand extends BaseCommand {
         // Fire & Forget: Background sync their local DB if > 15 mins since last
         triggerDeltaSync(targetUserId);
 
-        if (!artistName) {
+        if (artistName) {
+            // Already resolved from link, skip Last.fm search
+        } else if (!artistName) {
             try {
                 const tracks = await LastFM.getRecentTracks(dbUser.lastfmUsername, 1, dbUser.lastfmSessionKey);
                 if (tracks.length > 0) {
@@ -158,8 +169,14 @@ export default class WhoKnowsCommand extends BaseCommand {
         ]);
 
         if (localUsers.length === 0) {
-            const reply = `Nobody knows **${artistName}**.`;
-            return isSlash ? interactionOrMessage.editReply(reply) : interactionOrMessage.reply(reply);
+            const builder = new ComponentsV2()
+                .addText(`### [${artistName} in ${interactionOrMessage.guild?.name || 'this server'}](https://www.last.fm/music/${encodeURIComponent(artistName)})\n\n\u20051.\u2004\u2005**[${targetUser.displayName || targetUser.username}](https://last.fm/user/${encodeURIComponent(dbUser.lastfmUsername!)})\u200E** - **0** plays`);
+            
+            if (thumbnail) builder.addThumbnail(thumbnail);
+            if (tagsText) builder.addFooter(tagsText);
+
+            const payload = builder.build();
+            return isSlash ? interactionOrMessage.editReply(payload) : interactionOrMessage.reply(payload);
         }
 
         // Ensure sorted cleanly

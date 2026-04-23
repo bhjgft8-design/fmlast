@@ -215,4 +215,47 @@ export class TrackResolverService {
         const res = await Youtube.search(`${artist} - ${track}`);
         return res?.url || null;
     }
+
+    /**
+     * Parses a streaming service link and returns the artist and track name.
+     */
+    static async parseStreamingLink(url: string): Promise<{ artist: string; track: string } | null> {
+        // Spotify
+        const spTrackMatch = url.match(/(?:https?:\/\/)?open\.spotify\.com\/track\/([a-zA-Z0-9]+)/);
+        if (spTrackMatch) {
+            const meta = await Spotify.getTrackMetadataById(spTrackMatch[1]);
+            return meta ? { artist: meta.artist, track: meta.name } : null;
+        }
+
+        const spAlbumMatch = url.match(/(?:https?:\/\/)?open\.spotify\.com\/album\/([a-zA-Z0-9]+)/);
+        if (spAlbumMatch) {
+            const meta = await Spotify.getAlbumMetadataById(spAlbumMatch[1]);
+            return meta ? { artist: meta.artist, track: meta.name } : null;
+        }
+
+        const spArtistMatch = url.match(/(?:https?:\/\/)?open\.spotify\.com\/artist\/([a-zA-Z0-9]+)/);
+        if (spArtistMatch) {
+            const meta = await Spotify.getArtistMetadataById(spArtistMatch[1]);
+            return meta ? { artist: meta.artist, track: '' } : null;
+        }
+
+        // Apple Music
+        const amTrackMatch = url.match(/(?:https?:\/\/)?music\.apple\.com\/\w+\/album\/.+\/(\d+)(?:\?i=(\d+))?/);
+        if (amTrackMatch) {
+            const trackId = amTrackMatch[2] || amTrackMatch[1];
+            // Apple Music searchTrack uses query, but we can try to find by ID if we implement a lookup
+            // For now, let's use search with the ID if possible, or just the URL
+            const res = await AppleMusic.searchTrack('', url);
+            if (res) return { artist: res.artistName, track: res.trackName };
+        }
+
+        // Deezer
+        const dzTrackMatch = url.match(/(?:https?:\/\/)?(?:www\.)?deezer\.com\/\w+\/track\/(\d+)/);
+        if (dzTrackMatch) {
+            const res = await Deezer.searchTrack('', url);
+            if (res) return { artist: res.artist, track: res.name };
+        }
+
+        return null;
+    }
 }

@@ -442,6 +442,52 @@ export class Spotify {
         }
     }
 
+    /** Get album metadata by Spotify ID */
+    static async getAlbumMetadataById(albumId: string): Promise<{ name: string; artist: string } | null> {
+        if (this.isDisabled()) return null;
+
+        try {
+            const token = await this.getToken();
+            const { data } = await axios.get(`https://api.spotify.com/v1/albums/${albumId}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            if (data.name && data.artists?.length > 0) {
+                return {
+                    name: data.name,
+                    artist: data.artists[0].name
+                };
+            }
+            return null;
+        } catch (err: any) {
+            this.handleApiError(err);
+            return null;
+        }
+    }
+
+    /** Get artist metadata by Spotify ID */
+    static async getArtistMetadataById(artistId: string): Promise<{ name: string; artist: string } | null> {
+        if (this.isDisabled()) return null;
+
+        try {
+            const token = await this.getToken();
+            const { data } = await axios.get(`https://api.spotify.com/v1/artists/${artistId}`, {
+                headers: { Authorization: `Bearer ${token}` }
+            });
+
+            if (data.name) {
+                return {
+                    name: '', // Artists don't have a track name
+                    artist: data.name
+                };
+            }
+            return null;
+        } catch (err: any) {
+            this.handleApiError(err);
+            return null;
+        }
+    }
+
     /** Get tracks from a Spotify playlist */
     static async getPlaylistTracks(playlistId: string): Promise<{ name: string; artist: string }[]> {
         if (this.isDisabled()) return [];
