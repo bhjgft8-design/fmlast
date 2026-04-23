@@ -156,10 +156,15 @@ export default class TopTracksCommand extends BaseCommand {
         collector.on('end', () => {
             try {
                 const disabledPayload = generatePayload(currentPage);
-                if (disabledPayload.components) {
-                    disabledPayload.components.forEach((row: any) => {
-                        row.components.forEach((btn: any) => btn.disabled = true);
-                    });
+                if (disabledPayload.components && disabledPayload.components[0]) {
+                    const container = disabledPayload.components[0];
+                    if (container.components) {
+                        container.components.forEach((comp: any) => {
+                            if (comp.type === 1 && comp.components) {
+                                comp.components.forEach((btn: any) => btn.disabled = true);
+                            }
+                        });
+                    }
                 }
                 message.edit(disabledPayload).catch(() => {});
             } catch {}
