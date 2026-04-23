@@ -277,12 +277,13 @@ export class MusicPlayer {
             // Build yt-dlp args
             const ytdlArgs: any = {
                 output: '-',
-                format: 'bestaudio*',
+                format: 'ba[ext=m4a]/ba[ext=webm]/ba',
                 noCheckCertificates: true,
                 noWarnings: true,
                 noPlaylist: true,
                 rmCacheDir: true,
                 ageLimit: 99,
+                extractorArgs: 'youtube:player_client=android,web',
                 addHeader: [
                     'referer:youtube.com',
                     'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
@@ -299,13 +300,14 @@ export class MusicPlayer {
             ytProcess.catch((err) => {
                 if (err.signal === 'SIGTERM' || err.message?.includes('SIGTERM')) return;
 
-                // Use the full stderr from the error object for reliable detection
                 const fullError = (err.stderr || stderrBuffer || err.message || '').toLowerCase();
 
                 if (fullError.includes('sign in') || fullError.includes('age') || fullError.includes('unavailable') || fullError.includes('format')) {
                     if (!streamUrl.startsWith('scsearch1:')) {
-                        console.log(`[MusicPlayer] 🔄 YouTube blocked/failed. Triggering SoundCloud fallback...`);
+                        console.log(`[MusicPlayer] 🔄 YouTube block/format error. Switching to SoundCloud fallback...`);
                         queue.isFallingBack = true;
+                        // Manually trigger the transition
+                        this.onTrackEnd(guildId);
                         return; 
                     } else {
                         queue.textChannel.send(`⚠️ **Skipped**: \`${track.title}\` — Fallback stream is also unavailable.`).catch(() => { });
