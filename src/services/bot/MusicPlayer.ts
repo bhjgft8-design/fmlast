@@ -59,6 +59,7 @@ export interface GuildQueue {
     currentProcess: any | null;
     consecutiveErrors: number;
     isFallingBack?: boolean;
+    currentResource: any | null;
 }
 
 export class MusicPlayer {
@@ -265,7 +266,10 @@ export class MusicPlayer {
         if (!streamUrl) {
             queue.textChannel.send(`❌ Missing URL for: **${track.title}**`);
             this.onTrackEnd(guildId, true);
-             try {
+            return;
+        }
+
+        try {
             queue.isPlaying = true;
             let stderrBuffer = '';
 
@@ -324,15 +328,15 @@ export class MusicPlayer {
 
             ytProcess.stderr?.on('data', (data: Buffer) => { stderrBuffer += data.toString(); });
 
-            this.player.play(resource);
+            queue.player?.play(resource);
             queue.currentResource = resource;
 
             console.log(`[MusicPlayer] ✅ Stream started: ${track.title}`);
 
             // Render UI and Scrobble
             if (track.artistName && track.trackTitle) {
-                this.sendPlaybackUI(guildId, track);
-                this.handleScrobbling(guildId, track);
+                MusicPlayer.sendPlaybackUI(guildId, track);
+                MusicPlayer.handleScrobbling(guildId, track);
             }
 
         } catch (err: any) {
@@ -341,8 +345,8 @@ export class MusicPlayer {
         }
     }
 
-    private sendPlaybackUI(guildId: string, track: any) {
-        const queue = this.queues.get(guildId);
+    private static sendPlaybackUI(guildId: string, track: any) {
+        const queue = MusicPlayer.queues.get(guildId);
         if (!queue) return;
         try {
             const pbBuilder = new ComponentsV2()
@@ -359,8 +363,8 @@ export class MusicPlayer {
         } catch { }
     }
 
-    private async handleScrobbling(guildId: string, track: any) {
-        const queue = this.queues.get(guildId);
+    private static async handleScrobbling(guildId: string, track: any) {
+        const queue = MusicPlayer.queues.get(guildId);
         if (!queue) return;
         try {
             const voiceChannel = await queue.textChannel.guild.channels.fetch(queue.voiceChannelId) as VoiceChannel;
