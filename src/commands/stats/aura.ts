@@ -372,11 +372,19 @@ export default class AuraCommand extends BaseCommand {
                     }
                 }
 
+                console.log(`[aura] Preview URL resolved: ${previewUrl ? previewUrl.substring(0, 80) + '...' : 'NONE'}`);
+
                 if (previewUrl) {
                     const imagePath = path.join(tempDir, `aura_${interactionOrMessage.id}.webp`);
                     const videoId = `aura_vid_${interactionOrMessage.id}`;
                     await fsp.writeFile(imagePath, buffer);
+                    console.log(`[aura] Image written to ${imagePath} (${buffer.length} bytes)`);
+
+                    console.log(`[aura] Starting FFmpeg video creation...`);
                     const videoPath = await createAuraVideo(imagePath, previewUrl, videoId);
+                    
+                    const videoStat = await fsp.stat(videoPath);
+                    console.log(`[aura] ✅ Video created: ${videoPath} (${videoStat.size} bytes)`);
 
                     const attachment = new AttachmentBuilder(videoPath, { name: 'aura.mp4' });
 
@@ -391,9 +399,11 @@ export default class AuraCommand extends BaseCommand {
                     await fsp.unlink(imagePath).catch(() => { });
                     await fsp.unlink(videoPath).catch(() => { });
                     sent = true;
+                } else {
+                    console.warn('[aura] ⚠️ No preview URL found — will send static image only');
                 }
             } catch (err) {
-                console.error('[aura] video generation failed:', err);
+                console.error('[aura] ❌ video generation failed:', err);
             }
 
             if (!sent) {
