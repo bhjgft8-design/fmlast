@@ -251,39 +251,34 @@ export class MusicPlayer {
 
         const track = queue.tracks[0];
         let streamUrl = track.url;
-        
+
         if (queue.isFallingBack) {
             // Consume the fallback flag so it doesn't loop
             queue.isFallingBack = false;
-            const scQuery = track.artistName && track.trackTitle 
-                ? `${track.artistName} ${track.trackTitle}` 
+            const scQuery = track.artistName && track.trackTitle
+                ? `${track.artistName} ${track.trackTitle}`
                 : track.title;
             streamUrl = `scsearch1:${scQuery}`;
-            queue.textChannel.send(`⚠️ **YouTube blocked this server's IP!** Rerouting audio through SoundCloud for \`${track.title}\`...`).catch(() => {});
+            queue.textChannel.send(`⚠️ **YouTube blocked this server's IP!** Rerouting audio through SoundCloud for \`${track.title}\`...`).catch(() => { });
         }
 
         if (!streamUrl) {
             queue.textChannel.send(`❌ Missing URL for: **${track.title}**`);
             this.onTrackEnd(guildId, true);
-            return;
-        }
-
-        try {
+             try {
             queue.isPlaying = true;
             let stderrBuffer = '';
 
-            console.log(`[MusicPlayer] 🎵 Streaming (Cookies Only): ${track.title}`);
+            console.log(`[MusicPlayer] 🎵 Playing: ${track.title} (Cookies Only)`);
 
-            // Build yt-dlp args
             const ytdlArgs: any = {
                 output: '-',
-                format: 'ba[ext=m4a]/ba[ext=webm]/ba',
+                format: 'bestaudio*',
                 noCheckCertificates: true,
                 noWarnings: true,
                 noPlaylist: true,
                 rmCacheDir: true,
                 ageLimit: 99,
-                extractorArgs: 'youtube:player_client=android,web',
                 addHeader: [
                     'referer:youtube.com',
                     'user-agent:Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
@@ -295,150 +290,113 @@ export class MusicPlayer {
             }
 
             const ytProcess = ytdlExec(streamUrl, ytdlArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
-
-            // Catch the promise rejection
-            ytProcess.catch((err) => {
-                if (err.signal === 'SIGTERM' || err.message?.includes('SIGTERM')) return;
-
-                const fullError = (err.stderr || stderrBuffer || err.message || '').toLowerCase();
-
-                if (fullError.includes('sign in') || fullError.includes('age') || fullError.includes('unavailable') || fullError.includes('format')) {
-                    if (!streamUrl.startsWith('scsearch1:')) {
-                        console.log(`[MusicPlayer] 🔄 YouTube block/format error. Switching to SoundCloud fallback...`);
-                        queue.isFallingBack = true;
-                        // Manually trigger the transition
-                        this.onTrackEnd(guildId);
-                        return; 
-                    } else {
-                        queue.textChannel.send(`⚠️ **Skipped**: \`${track.title}\` — Fallback stream is also unavailable.`).catch(() => { });
-                    }
-                } else if (!fullError.includes('errno 22')) {
-                    console.error('[MusicPlayer] yt-dlp failed (code 1):', fullError.substring(0, 200));
-                    queue.textChannel.send(`⚠️ **Skipped**: \`${track.title}\` — Could not stream this track.`).catch(() => { });
-                }
-                
-                queue.isFallingBack = false;
-                this.onTrackEnd(guildId, true);
-            });
-
             queue.currentProcess = ytProcess;
 
-            if (!ytProcess.stdout) {
-                throw new Error("Failed to open stdout from yt-dlp");
-            }
+            ytProcess.catch((err) => {
+                if (err.signal === 'SIGTERM' || err.message?.includes('SIGTERM')) return;
+                const fullError = (err.stderr || stderrBuffer || err.message || '').toLowerCase();
+
+                if (fullError.includes('sign in') || fullError.includes('age') || fullError.includes('format')) {
+                    if (!streamUrl.startsWith('scsearch1:')) {
+                        console.log(`[MusicPlayer] 🔄 YouTube block detected. Attempting silent fallback...`);
+                        queue.isFallingBack = true;
+                        if (queue.currentProcess === ytProcess) {
+                            queue.currentProcess = null;
+                            this.onTrackEnd(guildId);
+                        }
+                        return;
+                    }
+                }
+
+                if (queue.currentProcess === ytProcess) {
+                    console.error('[MusicPlayer] Playback failed:', fullError.substring(0, 150));
+                    queue.currentProcess = null;
+                    this.onTrackEnd(guildId, true);
+                }
+            });
+
+            if (!ytProcess.stdout) throw new Error("Failed to open stdout");
 
             const resource = createAudioResource(ytProcess.stdout, {
                 inputType: StreamType.Arbitrary,
                 inlineVolume: true
             });
 
-            // Capture stderr for diagnostics
-            ytProcess.on('error', (err) => console.error('[MusicPlayer] yt-dlp process error:', err));
-            ytProcess.stderr?.on('data', (data: Buffer) => {
-                const msg = data.toString();
-                stderrBuffer += msg;
-                // Avoid logging Errno 22 as a warning
-                if (msg.includes('ERROR:') && !msg.includes('Errno 22')) {
-                    console.warn('[MusicPlayer] yt-dlp stderr:', msg.trim());
-                }
-            });
+            ytProcess.stderr?.on('data', (data: Buffer) => { stderrBuffer += data.toString(); });
 
-            // Resource-level error handling
-            resource.playStream.on('error', (error) => {
-                console.error(`[MusicPlayer] Resource stream error for ${track.url}:`, error);
-                if (queue.currentProcess && !queue.currentProcess.killed) {
-                    try { queue.currentProcess.kill(); } catch { }
-                    queue.currentProcess = null;
-                }
-                this.onTrackEnd(guildId, true);
-            });
+            this.player.play(resource);
+            queue.currentResource = resource;
 
-            queue.isPaused = false;
-            queue.player?.play(resource);
-            queue.consecutiveErrors = 0; // Reset error counter on successful playback start
+            console.log(`[MusicPlayer] ✅ Stream started: ${track.title}`);
 
-            console.log(`[MusicPlayer] ✅ Piped Playback started: ${track.title}`);
-
-            // Render Now Playing UI
+            // Render UI and Scrobble
             if (track.artistName && track.trackTitle) {
-                try {
-                    const pbBuilder = new ComponentsV2()
-                        .setAccent(0x1DB954) // Spotify Green
-                        .addThumbnail(track.artworkUrl || track.thumbnail, `### 🎵 ${track.artistName} - ${track.trackTitle.replace(/\[.*?\]|\(.*?\)/g, '')}\n**${track.channelTitle}**${track.statsText || ''}\n-# Added to queue by ${track.requesterName || 'Unknown'}`)
-                        .addSeparator()
-                        .addRow([
-                            { type: 2, style: 2, label: '⏸️ Pause', custom_id: `mp-pause:${guildId}` },
-                            { type: 2, style: 2, label: '⏭️ Skip', custom_id: `mp-skip:${guildId}` },
-                            { type: 2, style: 4, label: '🛑 Stop', custom_id: `mp-stop:${guildId}` },
-                            { type: 2, style: 2, label: '📝 Lyrics', custom_id: `wh-lyrics:${track.artistName.substring(0, 35)}|${track.trackTitle.substring(0, 35)}` }
-                        ]);
-
-                    queue.textChannel.send(pbBuilder.build()).catch(() => { });
-                } catch (err) {
-                    console.error('[MusicPlayer] Failed to send playback UI:', err);
-                }
-            }
-
-            // Native Playback Scrobbling
-            if (track.artistName && track.trackTitle) {
-                try {
-                    const voiceChannel = await queue.textChannel.guild.channels.fetch(queue.voiceChannelId) as VoiceChannel;
-                    if (voiceChannel) {
-                        const listenerDiscordIds = voiceChannel.members
-                            .filter(m => !m.user.bot)
-                            .map(m => m.id);
-
-                        if (listenerDiscordIds.length > 0) {
-                            await ScrobbleService.scrobbleForUsers(listenerDiscordIds, {
-                                artist: track.artistName,
-                                track: track.trackTitle,
-                            });
-
-                            const builder = new ComponentsV2()
-                                .setAccent(0xd80000)
-                                .addText(`၊،||၊ Scrobbling **${track.trackTitle}** by **${track.artistName}** for ${listenerDiscordIds.length} listener${listenerDiscordIds.length === 1 ? '' : 's'}`)
-                                .addAction(`Length ${track.duration || '0:00'} — bot`, {
-                                    type: 2, custom_id: 'user-setting-botscrobbling-manage', style: 2, label: 'Manage'
-                                });
-
-                            queue.textChannel.send(builder.build()).catch(() => { });
-                        }
-                    }
-                } catch (err) {
-                    console.error('[MusicPlayer] Failed to scrobble playback:', err);
-                }
+                this.sendPlaybackUI(guildId, track);
+                this.handleScrobbling(guildId, track);
             }
 
         } catch (err: any) {
-            console.error(`[MusicPlayer] Stream error for ${track.url}:`, err);
-            queue.textChannel.send(`❌ Failed to stream: **${track.title}**\n-# Error: ${err.message || 'yt-dlp piping failed'}`);
+            console.error(`[MusicPlayer] Critical error:`, err);
             this.onTrackEnd(guildId, true);
         }
     }
 
+    private sendPlaybackUI(guildId: string, track: any) {
+        const queue = this.queues.get(guildId);
+        if (!queue) return;
+        try {
+            const pbBuilder = new ComponentsV2()
+                .setAccent(0x1DB954)
+                .addThumbnail(track.artworkUrl || track.thumbnail, `### 🎵 ${track.artistName} - ${track.trackTitle.replace(/\[.*?\]|\(.*?\)/g, '')}\n**${track.channelTitle}**${track.statsText || ''}\n-# Added to queue by ${track.requesterName || 'Unknown'}`)
+                .addSeparator()
+                .addRow([
+                    { type: 2, style: 2, label: '⏸️ Pause', custom_id: `mp-pause:${guildId}` },
+                    { type: 2, style: 2, label: '⏭️ Skip', custom_id: `mp-skip:${guildId}` },
+                    { type: 2, style: 4, label: '🛑 Stop', custom_id: `mp-stop:${guildId}` },
+                    { type: 2, style: 2, label: '📝 Lyrics', custom_id: `wh-lyrics:${track.artistName.substring(0, 35)}|${track.trackTitle.substring(0, 35)}` }
+                ]);
+            queue.textChannel.send(pbBuilder.build()).catch(() => { });
+        } catch { }
+    }
+
+    private async handleScrobbling(guildId: string, track: any) {
+        const queue = this.queues.get(guildId);
+        if (!queue) return;
+        try {
+            const voiceChannel = await queue.textChannel.guild.channels.fetch(queue.voiceChannelId) as VoiceChannel;
+            if (voiceChannel) {
+                const listeners = voiceChannel.members.filter(m => !m.user.bot).map(m => m.id);
+                if (listeners.length > 0) {
+                    await ScrobbleService.scrobbleForUsers(listeners, { artist: track.artistName, track: track.trackTitle });
+                    const builder = new ComponentsV2().setAccent(0xd80000).addText(`Scrobbling **${track.trackTitle}** by **${track.artistName}**`);
+                    queue.textChannel.send(builder.build()).catch(() => { });
+                }
+            }
+        } catch { }
+    }
+
     private static onTrackEnd(guildId: string, error = false) {
         const queue = this.queues.get(guildId);
-        if (queue) {
-            // Intercept fallback request
-            if (queue.isFallingBack) {
-                queue.isPlaying = false; // Reset playing state so processQueue executes
-                this.processQueue(guildId);
+        if (!queue) return;
+
+        if (queue.isFallingBack) {
+            queue.isPlaying = false;
+            this.processQueue(guildId);
+            return;
+        }
+
+        if (error) {
+            queue.consecutiveErrors++;
+            if (queue.consecutiveErrors >= 3) {
+                queue.textChannel.send('🛑 **Stopping** — Too many errors.');
+                this.stop(guildId);
                 return;
             }
-
-            if (error) {
-                queue.consecutiveErrors++;
-                if (queue.consecutiveErrors >= 3) {
-                    queue.textChannel.send('🛑 **Stopping playback** — Too many consecutive errors. Please check the track links or bot connection.');
-                    this.stop(guildId);
-                    return;
-                }
-            } else {
-                queue.consecutiveErrors = 0;
-            }
-
-            queue.tracks.shift();
-            this.processQueue(guildId);
+        } else {
+            queue.consecutiveErrors = 0;
         }
+
+        queue.tracks.shift();
+        this.processQueue(guildId);
     }
 }
