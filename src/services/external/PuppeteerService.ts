@@ -20,6 +20,8 @@ export class PuppeteerService {
 
         if (!this.browser || !this.browser.connected) {
             this.isLaunching = true;
+            // Clear stale pool references
+            this.pagePool = [];
             try {
                 LoggerService.info('Launching optimized headless browser...', 'Puppeteer');
                 this.browser = await puppeteer.launch({
@@ -30,7 +32,10 @@ export class PuppeteerService {
                         '--disable-dev-shm-usage',
                         '--disable-accelerated-2d-canvas',
                         '--disable-gpu',
-                        '--font-render-hinting=none'
+                        '--font-render-hinting=none',
+                        '--single-process',
+                        '--disable-extensions',
+                        '--js-flags=--max-old-space-size=256'
                     ]
                 });
                 LoggerService.info('Browser launched successfully.', 'Puppeteer');
@@ -62,10 +67,19 @@ export class PuppeteerService {
 
     /**
      * Get a page from the pool or create a new one if pool is empty.
+     * Validates that pooled pages are still alive before returning them.
      */
     private static async getPage(): Promise<Page> {
-        if (this.pagePool.length > 0) {
-            return this.pagePool.pop()!;
+        while (this.pagePool.length > 0) {
+            const page = this.pagePool.pop()!;
+            // Validate the page is still usable
+            try {
+                if (!page.isClosed()) {
+                    return page;
+                }
+            } catch {
+                // Page is dead, discard and try next
+            }
         }
         const browser = await this.getBrowser();
         return await browser.newPage();
@@ -75,19 +89,39 @@ export class PuppeteerService {
      * Return a page to the pool.
      */
     private static async releasePage(page: Page) {
-        if (this.pagePool.length < this.MAX_POOL_SIZE) {
-            // Clean up the page by going to about:blank to ensure no state leaks
-            await page.goto('about:blank').catch(() => {});
-            this.pagePool.push(page);
-        } else {
-            await page.close().catch(() => {});
+        try {
+            if (page.isClosed()) return;
+            if (this.pagePool.length < this.MAX_POOL_SIZE) {
+                // Clean up the page by going to about:blank to ensure no state leaks
+                await page.goto('about:blank').catch(() => {});
+                this.pagePool.push(page);
+            } else {
+                await page.close().catch(() => {});
+            }
+        } catch {
+            // Page is already dead, just discard
         }
     }
 
     /**
      * Render an HTML template into a PNG buffer.
+     * Auto-retries once on session-closed errors by relaunching the browser.
      */
     static async render(templateName: string, data: any, viewport: { width: number; height: number }): Promise<Buffer> {
+        try {
+            return await this._renderInternal(templateName, data, viewport);
+        } catch (err: any) {
+            // If the browser/page crashed, relaunch and retry once
+            if (err.message?.includes('Session closed') || err.message?.includes('Target closed') || err.message?.includes('Protocol error')) {
+                LoggerService.warn(`Browser session crashed during ${templateName} render. Relaunching...`, 'Puppeteer');
+                await this.shutdown();
+                return await this._renderInternal(templateName, data, viewport);
+            }
+            throw err;
+        }
+    }
+
+    private static async _renderInternal(templateName: string, data: any, viewport: { width: number; height: number }): Promise<Buffer> {
         const startTime = Date.now();
         const page = await this.getPage();
 
