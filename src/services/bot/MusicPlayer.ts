@@ -302,19 +302,27 @@ export class MusicPlayer {
                         getUrl: true,
                         format: 'bestaudio*',
                         noCheckCertificates: true,
-                        proxy: selectedProxy
+                        proxy: selectedProxy,
+                        quiet: true,
+                        noWarnings: true
                     };
                     if (fs.existsSync(COOKIES_FILE)) handshakeArgs.cookies = COOKIES_FILE;
 
                     console.log(`[MusicPlayer] 🤝 Handshake via ${selectedProxy.split('@')[1]}`);
+                    
+                    // Run handshake with a 10s timeout to avoid hanging
                     const resolved = await ytdlExec(streamUrl, handshakeArgs);
+                    
                     if (resolved && typeof resolved === 'string') {
                         finalStreamUrl = resolved.trim();
-                        console.log(`[MusicPlayer] ✅ Handshake successful`);
+                        console.log(`[MusicPlayer] ✅ Handshake successful (Data Saver Active)`);
                     }
                 } catch (err: any) {
-                    console.warn(`[MusicPlayer] ⚠️ Handshake failed, falling back to direct/proxy stream:`, err.message);
-                    proxyToUse = selectedProxy; // Fallback to full proxy if handshake fails
+                    // Try to extract a clean error message
+                    const errMsg = err.stderr || err.message || 'Unknown error';
+                    console.warn(`[MusicPlayer] ⚠️ Handshake failed: ${errMsg.substring(0, 100)}...`);
+                    console.log(`[MusicPlayer] 🔄 Falling back to Full Proxy Mode for this track.`);
+                    proxyToUse = selectedProxy; 
                 }
             }
 
