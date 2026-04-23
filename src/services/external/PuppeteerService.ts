@@ -180,7 +180,7 @@ export class PuppeteerService {
             // 3. Take screenshot
             const buffer = await page.screenshot({
                 type: 'webp',
-                quality: 85,
+                quality: 100,
                 omitBackground: false
             });
 
