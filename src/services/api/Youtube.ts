@@ -105,7 +105,10 @@ function getAuthFlags(attempt = 1): string[] {
     }
 
     if (existsSync(COOKIES_FILE)) {
+        console.log(`[Youtube] 🍪 Using cookies from: ${COOKIES_FILE}`);
         flags.push('--cookies', COOKIES_FILE);
+    } else {
+        console.warn(`[Youtube] ⚠️ No cookies found at: ${COOKIES_FILE}`);
     }
     return flags;
 }

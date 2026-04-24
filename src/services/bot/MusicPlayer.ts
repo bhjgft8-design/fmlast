@@ -23,9 +23,10 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 // Railway/Production Cookie Sync & Sanitization:
-// We use tmpdir() because writing to the root directory on cloud hosts can have permission issues.
 const COOKIES_FILE = join(tmpdir(), `fm2_yt_cookies.txt`);
 const rawEnvCookie = process.env.YOUTUBE_COOKIES?.replace(/^["']|["']$/g, '').trim();
+
+console.log(`[MusicPlayer] 🔍 Checking for YOUTUBE_COOKIES env var... ${rawEnvCookie ? 'Found (length: ' + rawEnvCookie.length + ')' : 'NOT FOUND'}`);
 
 if (rawEnvCookie) {
     try {
@@ -43,7 +44,6 @@ if (rawEnvCookie) {
             }
             cookieContent = sanitized.join('\n');
         } else {
-            // Convert semicolon-separated cookies to Netscape format
             const lines = ['# Netscape HTTP Cookie File'];
             for (const part of rawEnvCookie.split(';')) {
                 const eq = part.indexOf('=');
@@ -55,7 +55,7 @@ if (rawEnvCookie) {
             cookieContent = lines.join('\n');
         }
         fs.writeFileSync(COOKIES_FILE, cookieContent, { encoding: 'utf8', mode: 0o600 });
-        console.log('[MusicPlayer] 🍪 Synchronized and Sanitized cookies.txt.');
+        console.log(`[MusicPlayer] 🍪 Synchronized and Sanitized cookies to: ${COOKIES_FILE}`);
     } catch (err) {
         console.error('[MusicPlayer] ❌ Failed to write cookies.txt:', err);
     }
