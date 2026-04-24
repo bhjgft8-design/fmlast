@@ -115,18 +115,31 @@ if (existsSync(systemYtdlp)) {
     }
 }
 
-// --- Startup Diagnostic ---
+ensureCookiesFile();
+
+// --- Startup Diagnostic & Keep-Alive ---
 try {
     const versionCheck = spawnSync(ytdlpBinary, ['--version'], { encoding: 'utf8' });
     console.log(`[Youtube] yt-dlp version: ${versionCheck.stdout?.trim()}`);
 
-    // Check if bgutil plugin is loaded by passing dummy args and checking for errors
-    const potCheck = spawnSync(ytdlpBinary,
+    // Check if bgutil plugin is loaded
+    const potCheck = spawnSync(ytdlpBinary, 
         ['--extractor-args', 'youtubepot-bgutilhttp:base_url=http://test', '-v', '--help'],
         { encoding: 'utf8' }
     );
     const pluginLoaded = potCheck.stderr?.includes('bgutil') || potCheck.stdout?.includes('bgutil');
     console.log(`[Youtube] bgutil PO token plugin loaded: ${pluginLoaded}`);
+
+    // Start Keep-Alive if Token Server is configured
+    if (config.POTOKEN_SERVER) {
+        let baseUrl = config.POTOKEN_SERVER.replace(/\/$/, '');
+        if (!baseUrl.startsWith('http')) baseUrl = `https://${baseUrl}`;
+        
+        console.log(`[Youtube] 💓 Starting Keep-Alive heartbeat for: ${baseUrl}`);
+        setInterval(() => {
+            fetch(baseUrl).catch(() => {});
+        }, 10 * 60 * 1000); // Every 10 minutes
+    }
 } catch (err) {
     console.warn('[Youtube] Startup diagnostic failed:', err);
 }
