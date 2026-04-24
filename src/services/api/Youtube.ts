@@ -74,9 +74,9 @@ if (typeof ffmpegStatic === 'string') {
 }
 
 const CLIENT_ROTATION: readonly string[] = [
-    'tv_simply,mweb,web_safari,ios',
-    'mweb,tv_simply,web_safari,ios',
-    'web_safari,tv_simply,mweb,ios',
+    'tv_simply,mweb,android,ios',
+    'mweb,tv_simply,android,ios',
+    'android,tv_simply,mweb,ios',
 ];
 
 const POTOKEN_CLIENT_ROTATION: readonly string[] = [
@@ -137,37 +137,47 @@ export class Youtube {
             }
         }
 
-        // 2. youtube-sr search
-        try {
-            const results = await YouTubeSR.search(query, { limit: 1, type: 'video' });
-            if (results.length > 0) {
-                const video = results[0];
-                const url = video.url || `https://www.youtube.com/watch?v=${video.id}`;
-                return {
-                    title: video.title || 'Unknown Title',
-                    url: url,
-                    id: video.id || '',
-                    thumbnail: video.thumbnail?.url || '',
-                    channelTitle: video.channel?.name || 'Unknown Channel',
-                    duration: video.durationFormatted,
-                    durationSeconds: Math.floor((video.duration ?? 0) / 1000),
-                    views: video.views ? video.views.toLocaleString() : undefined
-                };
-            }
-        } catch (err) {
-            console.warn('[Youtube] youtube-sr search failed, falling back to yt-dlp:', err instanceof Error ? err.message : String(err));
-            return this.searchByQueryWithYtdlp(query);
-        }
-
-        return null;
+        const results = await this.searchByQuery(query);
+        return results[0] ?? null;
     }
 
-    private static async searchByQueryWithYtdlp(query: string): Promise<YoutubeResult | null> {
+    public static async searchByQuery(query: string): Promise<YoutubeResult[]> {
+        // Primary search using yt-dlp for maximum reliability on cloud IPs
+        try {
+            const res = await this.searchByQueryWithYtdlp(query);
+            return res;
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.warn(`[Youtube] yt-dlp search failed, trying youtube-sr fallback: ${message}`);
+            
+            try {
+                const results = await YouTubeSR.search(query, {
+                    limit: 5,
+                    type: 'video',
+                });
+
+                return results.map((video) => ({
+                    title: video.title ?? 'Unknown Title',
+                    url: video.url,
+                    id: video.id ?? '',
+                    thumbnail: video.thumbnail?.url ?? '',
+                    channelTitle: video.channel?.name ?? 'Unknown Channel',
+                    duration: video.durationFormatted,
+                    durationSeconds: Math.floor((video.duration ?? 0) / 1000),
+                }));
+            } catch (srError) {
+                console.error(`[Youtube] All search methods failed:`, srError);
+                return [];
+            }
+        }
+    }
+
+    private static async searchByQueryWithYtdlp(query: string, limit = 5): Promise<YoutubeResult[]> {
         const cookieFlags = getAuthFlags();
         try {
             const result = await new Promise<any>((resolve, reject) => {
                 const args = [
-                    `ytsearch1:${query}`,
+                    `ytsearch${limit}:${query}`,
                     '--dump-single-json',
                     '--flat-playlist',
                     '--no-warnings',
@@ -203,24 +213,23 @@ export class Youtube {
                 });
             });
 
-            const entry = result.entries?.[0];
-            if (!entry) return null;
-
-            const duration = Number(entry.duration) || 0;
-            const videoId = entry.id || entry.url;
-
-            return {
-                title: entry.title || 'Unknown Title',
-                url: `https://www.youtube.com/watch?v=${videoId}`,
-                id: videoId,
-                durationSeconds: duration,
-                duration: formatDuration(duration),
-                thumbnail: entry.thumbnails?.[0]?.url || entry.thumbnail || '',
-                channelTitle: entry.uploader || entry.channel || 'Unknown Channel',
-            };
-        } catch (err) {
-            console.error('[Youtube] yt-dlp search fallback failed:', err);
-            return null;
+            const entries = result.entries || [];
+            return entries.map((entry: any) => {
+                const duration = Number(entry.duration) || 0;
+                const videoId = entry.id || entry.url;
+                return {
+                    title: entry.title || 'Unknown Title',
+                    url: `https://www.youtube.com/watch?v=${videoId}`,
+                    id: videoId,
+                    durationSeconds: duration,
+                    duration: formatDuration(duration),
+                    thumbnail: entry.thumbnails?.[0]?.url || entry.thumbnail || '',
+                    channelTitle: entry.uploader || entry.channel || 'Unknown Channel',
+                };
+            });
+        } catch (error) {
+            console.error('[Youtube] yt-dlp search error:', error);
+            return [];
         }
     }
 
