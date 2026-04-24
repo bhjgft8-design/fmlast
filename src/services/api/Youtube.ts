@@ -64,7 +64,25 @@ function ensureCookiesFile(): void {
 
     try {
         let content = raw.replace(/^["']|["']$/g, '').trim();
-        if (!content.startsWith('# Netscape')) {
+
+        if (content.startsWith('# Netscape')) {
+            // Re-parse and re-write to guarantee real tab characters,
+            // since Railway env vars often convert \t → spaces
+            const lines = content.split('\n').map(line => {
+                if (line.startsWith('#') || line.trim() === '') return line;
+                // Split on any whitespace (handles both tabs and spaces from env var)
+                const parts = line.trim().split(/\s+/);
+                if (parts.length >= 7) {
+                    // Rejoin with real tabs: domain, flag, path, secure, expiry, name, value
+                    // Value may contain spaces/= so rejoin tail
+                    const [domain, flag, path, secure, expiry, name, ...valueParts] = parts;
+                    return [domain, flag, path, secure, expiry, name, valueParts.join('')].join('\t');
+                }
+                return line;
+            });
+            content = lines.join('\n');
+        } else {
+            // Raw key=value format — build from scratch
             const lines = ['# Netscape HTTP Cookie File'];
             for (const part of content.split(';')) {
                 const eq = part.indexOf('=');
@@ -75,8 +93,9 @@ function ensureCookiesFile(): void {
             }
             content = lines.join('\n');
         }
+
         writeFileSync(COOKIES_FILE, content, { mode: 0o600 });
-        console.log('[Youtube] Failsafe: Cookies file created/restored');
+        console.log('[Youtube] Cookies file written with proper tab formatting');
     } catch (err) {
         console.error('[Youtube] Failed to ensure cookies file:', err);
     }
@@ -120,6 +139,16 @@ if (startupCookie) {
     console.log(`[Youtube] Cookie env var present: false`);
 }
 ensureCookiesFile();
+
+// Verify cookie tab formatting
+try {
+    if (existsSync(COOKIES_FILE)) {
+        const cookieFileContent = require('fs').readFileSync(COOKIES_FILE, 'utf8');
+        const firstDataLine = cookieFileContent.split('\n').find((l: string) => l.startsWith('.youtube.com'));
+        const hasRealTabs = firstDataLine?.includes('\t');
+        console.log(`[Youtube] Cookie file tab check: ${hasRealTabs ? '✓ tabs OK' : '⚠️ NO TABS — file is BROKEN'}`);
+    }
+} catch (err) {}
 
 let ffmpegBinary = 'ffmpeg';
 if (typeof ffmpegStatic === 'string') {
