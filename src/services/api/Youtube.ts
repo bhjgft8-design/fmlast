@@ -75,9 +75,9 @@ const CLIENT_ROTATION: readonly string[] = [
 ];
 
 const POTOKEN_CLIENT_ROTATION: readonly string[] = [
-    'ios,mweb,tv_simply',
-    'mweb,ios,tv_simply',
-    'tv_simply,mweb,ios',
+    'ios,android,mweb',
+    'android,ios,mweb',
+    'mweb,ios,android',
 ];
 
 function getPlayerClients(attempt = 1): string {
@@ -98,17 +98,15 @@ function getAuthFlags(attempt = 1): string[] {
         youtubeArgs.push('player_skip=webpage,configs');
     }
 
-    const flags: string[] = ['--extractor-args', `youtube:${youtubeArgs.join(';')}`];
-
     if (config.POTOKEN_SERVER) {
-        flags.push('--extractor-args', `youtubepot-bgutilhttp:base_url=${config.POTOKEN_SERVER}`);
+        // We add the Token Server to the main youtube extractor arguments
+        youtubeArgs.push(`po_token_base_url=${config.POTOKEN_SERVER}`);
     }
 
+    const flags: string[] = ['--extractor-args', `youtube:${youtubeArgs.join(';')}`];
+
     if (existsSync(COOKIES_FILE)) {
-        console.log(`[Youtube] 🍪 Using cookies from: ${COOKIES_FILE}`);
         flags.push('--cookies', COOKIES_FILE);
-    } else {
-        console.warn(`[Youtube] ⚠️ No cookies found at: ${COOKIES_FILE}`);
     }
     return flags;
 }
@@ -149,7 +147,7 @@ export class Youtube {
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             console.warn(`[Youtube] yt-dlp search failed, trying youtube-sr fallback: ${message}`);
-            
+
             try {
                 const results = await YouTubeSR.search(query, {
                     limit: 5,
