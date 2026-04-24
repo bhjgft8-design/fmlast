@@ -82,13 +82,12 @@ const CLIENT_ROTATION: readonly string[] = [
     'mweb,tv_simply,android,ios',
 ];
 
-// With a PO token server, use clients that serve Opus (itag 251/250).
-// `default` (web) and `web_safari` return the richest format set including Opus.
-// `ios`/`android` only serve AAC, which can't be copied into OGG.
+// On Railway, web clients get bot-blocked. ios/android bypass the check.
+// Trade-off: they only serve AAC, so we must always transcode.
 const POTOKEN_CLIENT_ROTATION: readonly string[] = [
-    'default,web_safari,tv_embedded',   // attempt 1 — Opus available for copy mode
-    'web_safari,default,mweb',          // attempt 2 — Opus available for copy mode
-    'tv_embedded,web_safari,default',   // attempt 3 — transcode fallback
+    'ios,android,mweb',
+    'android,ios,mweb',
+    'mweb,ios,android',
 ];
 
 function getPlayerClients(attempt = 1): string {
@@ -318,8 +317,8 @@ export class Youtube {
         const sanitizedUrl = url.trim();
 
         for (let attempt = 1; attempt <= STREAM_RETRY_ATTEMPTS; attempt++) {
-            // Copy mode first (zero quality loss). Falls back to transcode on last attempt.
-            const mode: StreamMode = attempt < STREAM_RETRY_ATTEMPTS ? 'copy' : 'transcode';
+            // Always transcode: ios/android only serve AAC, not Opus.
+            const mode: StreamMode = 'transcode';
             try {
                 const { stream, ready } = this.createYtdlpStream(sanitizedUrl, attempt, mode);
                 await ready;
