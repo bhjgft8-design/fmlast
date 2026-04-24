@@ -419,8 +419,9 @@ export class Youtube {
         const sanitizedUrl = url.trim();
 
         for (let attempt = 1; attempt <= STREAM_RETRY_ATTEMPTS; attempt++) {
-            // Always use transcode mode for maximum reliability on Railway.
-            const mode: StreamMode = 'transcode';
+            // Attempt 1: Try zero-latency copy mode (Safe since we have PO tokens now).
+            // Attempt 2 & 3: Reliable transcode fallbacks.
+            const mode: StreamMode = attempt === 1 ? 'copy' : 'transcode';
             try {
                 // If we don't have visitorData yet, try to get it before the first attempt
                 if (attempt === 1 && !currentVisitorData) {
