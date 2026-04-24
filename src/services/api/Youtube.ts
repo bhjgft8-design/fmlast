@@ -345,7 +345,11 @@ export class Youtube {
     ): { stream: Readable; ready: Promise<void> } {
         const cookieFlags = getAuthFlags(attempt);
 
-        const formatSelector = 'bestaudio/best';
+        // Copy mode: prefer Opus (OGG-compatible). AAC cannot be muxed into OGG without transcoding.
+        // Transcode mode: grab anything and re-encode to Opus.
+        const formatSelector = mode === 'copy'
+            ? 'bestaudio[acodec=opus]/bestaudio'
+            : 'bestaudio/best';
 
         const ytdlpArgs = [
             url,
