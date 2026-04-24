@@ -82,12 +82,10 @@ const CLIENT_ROTATION: readonly string[] = [
     'mweb,tv_simply,android,ios',
 ];
 
-// On Railway, web clients get bot-blocked. ios/android bypass the check.
-// Trade-off: they only serve AAC, so we must always transcode.
 const POTOKEN_CLIENT_ROTATION: readonly string[] = [
-    'ios,android,mweb',
-    'android,ios,mweb',
-    'mweb,ios,android',
+    'ios,android,mweb',   // attempt 1 — ios/android don't trigger webpage bot-check
+    'android,ios,mweb',   // attempt 2
+    'mweb,ios,android',   // attempt 3
 ];
 
 function getPlayerClients(attempt = 1): string {
@@ -317,7 +315,7 @@ export class Youtube {
         const sanitizedUrl = url.trim();
 
         for (let attempt = 1; attempt <= STREAM_RETRY_ATTEMPTS; attempt++) {
-            // Always transcode: ios/android only serve AAC, not Opus.
+            // Always transcode: ios/android serve AAC which can't be muxed into OGG without re-encoding.
             const mode: StreamMode = 'transcode';
             try {
                 const { stream, ready } = this.createYtdlpStream(sanitizedUrl, attempt, mode);
@@ -346,9 +344,11 @@ export class Youtube {
     ): { stream: Readable; ready: Promise<void> } {
         const cookieFlags = getAuthFlags(attempt);
 
-        // Since we always transcode on Railway (ios/android → AAC → Opus),
-        // just grab the best audio available. No codec/sample-rate filters needed.
-        const formatSelector = 'bestaudio/best';
+        // Copy mode: prefer Opus (OGG-compatible). AAC cannot be muxed into OGG without transcoding.
+        // Transcode mode: grab anything and re-encode to Opus.
+        const formatSelector = mode === 'copy'
+            ? 'bestaudio[acodec=opus]/bestaudio'
+            : 'bestaudio/best';
 
         const ytdlpArgs = [
             url,
