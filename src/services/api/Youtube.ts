@@ -120,16 +120,16 @@ function getAuthFlags(attempt = 1): string[] {
 
     if (config.YT_VISITOR_DATA) {
         youtubeArgs.push(`visitor_data=${config.YT_VISITOR_DATA}`);
+    }
 
-        // IMPORTANT: On Railway, fetching the webpage for mobile/TV clients 
-        // triggers an instant 403 "Sign in" block. We MUST skip it.
-        // We only allow it for web clients that need it for PO Tokens.
-        const clients = getPlayerClients(attempt);
-        const isWebClient = clients.includes('web') || clients.includes('default');
-        
-        if (!isWebClient) {
-            youtubeArgs.push('player_skip=webpage,configs');
-        }
+    // IMPORTANT: On Railway, fetching the webpage for mobile/TV clients 
+    // triggers an instant 403 "Sign in" block. We MUST skip it.
+    // We only allow it for web clients that need it for PO Tokens.
+    const clients = getPlayerClients(attempt);
+    const isWebClient = clients.includes('web') || clients.includes('default');
+    
+    if (!isWebClient) {
+        youtubeArgs.push('player_skip=webpage,configs');
     }
 
     const flags: string[] = ['--extractor-args', `youtube:${youtubeArgs.join(';')}`];
