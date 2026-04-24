@@ -83,9 +83,9 @@ const CLIENT_ROTATION: readonly string[] = [
 ];
 
 const POTOKEN_CLIENT_ROTATION: readonly string[] = [
-    'mweb,ios,android',   // attempt 1 (copy)  — mweb serves Opus (OGG-compatible)
-    'mweb,android,ios',   // attempt 2 (copy)  — mweb serves Opus (OGG-compatible)
-    'ios,android,mweb',   // attempt 3 (transcode) — any codec works, ios/android have best quality AAC
+    'ios,android,mweb',   // attempt 1 — ios/android don't trigger webpage bot-check
+    'android,ios,mweb',   // attempt 2
+    'mweb,ios,android',   // attempt 3
 ];
 
 function getPlayerClients(attempt = 1): string {
@@ -99,13 +99,9 @@ function getAuthFlags(attempt = 1): string[] {
 
     if (config.YT_VISITOR_DATA) {
         youtubeArgs.push(`visitor_data=${config.YT_VISITOR_DATA}`);
-
-        if (!config.POTOKEN_SERVER) {
-            // Only skip webpage when there's NO PO Token server.
-            // The PO Token plugin NEEDS the webpage to extract the BotGuard challenge.
-            // Without it, no challenge → no valid token → "Sign in" block.
-            youtubeArgs.push('player_skip=webpage,configs');
-        }
+        // ALWAYS skip webpage on Railway — fetching it from a datacenter IP
+        // triggers an instant "Sign in" block from YouTube.
+        youtubeArgs.push('player_skip=webpage,configs');
     }
 
     const flags: string[] = ['--extractor-args', `youtube:${youtubeArgs.join(';')}`];
@@ -319,7 +315,8 @@ export class Youtube {
         const sanitizedUrl = url.trim();
 
         for (let attempt = 1; attempt <= STREAM_RETRY_ATTEMPTS; attempt++) {
-            const mode: StreamMode = attempt < STREAM_RETRY_ATTEMPTS ? 'copy' : 'transcode';
+            // Always transcode: ios/android serve AAC which can't be muxed into OGG without re-encoding.
+            const mode: StreamMode = 'transcode';
             try {
                 const { stream, ready } = this.createYtdlpStream(sanitizedUrl, attempt, mode);
                 await ready;
