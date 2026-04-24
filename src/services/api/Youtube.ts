@@ -104,8 +104,8 @@ const CLIENT_ROTATION: readonly string[] = [
 // On Railway, tv_simply is the most reliable client.
 // We rotate to others if it fails or is throttled.
 const POTOKEN_CLIENT_ROTATION: readonly string[] = [
-    'mweb,ios,android',        // Attempt 1: High chance of Opus for copy mode
-    'ios,android,tv_simply',   // Attempt 2: Most reliable transcode fallback
+    'web_safari,ios,android',  // Attempt 1: Best chance for Opus (Copy Mode)
+    'ios,android,tv_simply',   // Attempt 2: Most reliable (Transcode Fallback)
     'tv_simply,ios,android',   // Attempt 3: Ultimate safety net
 ];
 
@@ -120,6 +120,16 @@ function getAuthFlags(attempt = 1): string[] {
 
     if (config.YT_VISITOR_DATA) {
         youtubeArgs.push(`visitor_data=${config.YT_VISITOR_DATA}`);
+
+        // IMPORTANT: On Railway, fetching the webpage for mobile/TV clients 
+        // triggers an instant 403 "Sign in" block. We MUST skip it.
+        // We only allow it for web clients that need it for PO Tokens.
+        const clients = getPlayerClients(attempt);
+        const isWebClient = clients.includes('web') || clients.includes('default');
+        
+        if (!isWebClient) {
+            youtubeArgs.push('player_skip=webpage,configs');
+        }
     }
 
     const flags: string[] = ['--extractor-args', `youtube:${youtubeArgs.join(';')}`];
