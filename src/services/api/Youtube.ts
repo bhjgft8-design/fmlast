@@ -428,9 +428,8 @@ export class Youtube {
         const sanitizedUrl = url.trim();
 
         for (let attempt = 1; attempt <= STREAM_RETRY_ATTEMPTS; attempt++) {
-            // Attempt 1: Try copy mode (Opus). If Opus isn't found, it falls back to bestaudio.
-            // Attempt 2 & 3: Force transcode for absolute reliability.
-            const mode: StreamMode = attempt === 1 ? 'copy' : 'transcode';
+            // Always use transcode mode for maximum reliability on Railway.
+            const mode: StreamMode = 'transcode';
             try {
                 const { stream, ready } = this.createYtdlpStream(sanitizedUrl, attempt, mode);
                 await ready;
