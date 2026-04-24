@@ -273,7 +273,6 @@ export class MusicPlayer {
                 noWarnings: true,
                 noPlaylist: true,
                 rmCacheDir: true,
-                youtubeSkipDashManifest: true,
                 preferFreeFormats: true,
                 addHeader: [
                     'referer:youtube.com',
