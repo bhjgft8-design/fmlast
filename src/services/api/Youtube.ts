@@ -48,7 +48,7 @@ const FFMPEG_PROBE_SIZE_TRANSCODE = 131_072;
 const FFMPEG_ANALYZE_DURATION_TRANSCODE = 200_000;
 const PASS_THROUGH_BUFFER_SIZE = 2 * 1024 * 1024;
 const YTDLP_CONCURRENT_FRAGMENTS = 4;
-const YTDLP_THROTTLED_RATE = '30K';
+const YTDLP_THROTTLED_RATE = '100K';
 const STREAM_RETRY_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 500;
 const RETRY_MAX_DELAY_MS = 8_000;
@@ -96,17 +96,17 @@ if (typeof ffmpegStatic === 'string') {
 }
 
 const CLIENT_ROTATION: readonly string[] = [
-    'android,tv_simply,mweb,ios',
-    'tv_simply,mweb,android,ios',
-    'mweb,tv_simply,android,ios',
+    'tv_simply,android,ios',
+    'android,tv_simply,ios',
+    'ios,android,tv_simply',
 ];
 
 // On Railway, tv_simply is the most reliable client.
 // We rotate to others if it fails or is throttled.
 const POTOKEN_CLIENT_ROTATION: readonly string[] = [
-    'default,web_safari,mweb', // Attempt 1: Best for Opus/Copy Mode (Desktop web)
+    'tv_simply,ios,android',   // Attempt 1: King of Bypass (try Copy Mode)
     'ios,android,tv_simply',   // Attempt 2: Most reliable (Transcode Fallback)
-    'tv_simply,ios,android',   // Attempt 3: Ultimate safety net
+    'tv_simply,ios,android',   // Attempt 3: Mobile web fallback
 ];
 
 function getPlayerClients(attempt = 1): string {
@@ -343,8 +343,8 @@ export class Youtube {
         const sanitizedUrl = url.trim();
 
         for (let attempt = 1; attempt <= STREAM_RETRY_ATTEMPTS; attempt++) {
-            // Attempt 1: Try copy mode (Opus).
-            // Attempt 2 & 3: Force transcode (reliability).
+            // Attempt 1: Try copy mode (Opus) using the robust tv_simply client.
+            // Attempt 2 & 3: Force transcode for absolute reliability.
             const mode: StreamMode = attempt === 1 ? 'copy' : 'transcode';
             try {
                 const { stream, ready } = this.createYtdlpStream(sanitizedUrl, attempt, mode);
