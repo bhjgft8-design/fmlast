@@ -40,6 +40,7 @@ type StreamMode = 'copy' | 'transcode';
 const CACHE_TTL_MS = 60 * 60 * 1000;
 const MAX_CACHE_SIZE = 500;
 const metadataCache = new Map<string, CacheEntry>();
+let currentVisitorData: string | null = process.env.YT_VISITOR_DATA || null;
 
 // ffmpeg/yt-dlp settings from MusicBox-prod
 const FFMPEG_PROBE_SIZE_COPY = 262_144;
@@ -178,8 +179,10 @@ function getAuthFlags(attempt = 1): string[] {
 
     const youtubeArgs: string[] = [`player_client=${getPlayerClients(attempt)}`];
 
-    if (config.YT_VISITOR_DATA) {
-        youtubeArgs.push(`visitor_data=${config.YT_VISITOR_DATA}`);
+    // Use dynamic visitorData if we have it, otherwise fallback to env
+    const vData = currentVisitorData || config.YT_VISITOR_DATA;
+    if (vData) {
+        youtubeArgs.push(`visitor_data=${vData}`);
     }
 
     const clients = getPlayerClients(attempt);
@@ -419,6 +422,11 @@ export class Youtube {
             // Always use transcode mode for maximum reliability on Railway.
             const mode: StreamMode = 'transcode';
             try {
+                // If we don't have visitorData yet, try to get it before the first attempt
+                if (attempt === 1 && !currentVisitorData) {
+                    await Youtube.refreshVisitorData().catch(() => {});
+                }
+
                 const { stream, ready } = this.createYtdlpStream(sanitizedUrl, attempt, mode);
                 await ready;
                 console.log(`[Youtube] Audio stream started (mode=${mode}, attempt ${attempt})`);
@@ -436,6 +444,41 @@ export class Youtube {
         }
 
         throw new Error(`Failed to get audio stream after ${STREAM_RETRY_ATTEMPTS} attempts: ${lastError}`);
+    }
+
+    /**
+     * Fetch a fresh visitorData from YouTube's API to ensure PO Tokens work long-term.
+     */
+    static async refreshVisitorData(): Promise<string | null> {
+        try {
+            const body = JSON.stringify({
+                context: {
+                    client: {
+                        clientName: 'WEB',
+                        clientVersion: '2.20240424.01.00'
+                    }
+                }
+            });
+
+            const resp = await fetch('https://www.youtube.com/youtubei/v1/visitor_id', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body
+            });
+
+            if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+            const data = await resp.json() as any;
+            const newVData = data.responseContext?.visitorData;
+
+            if (newVData) {
+                currentVisitorData = newVData;
+                console.log(`[Youtube] 🔄 Automatically refreshed visitorData: ${newVData.substring(0, 10)}...`);
+                return newVData;
+            }
+        } catch (err) {
+            console.warn('[Youtube] ⚠️ Failed to auto-refresh visitorData:', err);
+        }
+        return null;
     }
 
     private static createYtdlpStream(
