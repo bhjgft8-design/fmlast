@@ -98,16 +98,19 @@ function getAuthFlags(attempt = 1): string[] {
         youtubeArgs.push('player_skip=webpage,configs');
     }
 
-    if (config.POTOKEN_SERVER) {
-        // We add the Token Server to the main youtube extractor arguments
-        youtubeArgs.push(`po_token_base_url=${config.POTOKEN_SERVER}`);
-    }
-
     const flags: string[] = ['--extractor-args', `youtube:${youtubeArgs.join(';')}`];
+
+    if (config.POTOKEN_SERVER) {
+        // ESSENTIAL: The PO Token provider is a SEPARATE extractor in yt-dlp.
+        // We must pass its base_url using its specific prefix.
+        flags.push('--extractor-args', `youtubepot-bgutilhttp:base_url=${config.POTOKEN_SERVER}`);
+        console.log(`[Youtube] Linking PO Token Provider: ${config.POTOKEN_SERVER}`);
+    }
 
     if (existsSync(COOKIES_FILE)) {
         flags.push('--cookies', COOKIES_FILE);
     }
+
     return flags;
 }
 
