@@ -53,12 +53,7 @@ const STREAM_RETRY_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 500;
 const RETRY_MAX_DELAY_MS = 8_000;
 
-let cookieFilePath: string | null = null;
 const COOKIES_FILE = join(process.cwd(), 'cookies.txt');
-
-if (existsSync(COOKIES_FILE)) {
-    cookieFilePath = COOKIES_FILE;
-}
 
 let ytdlpBinary = 'yt-dlp';
 if (ytdlExec) {
@@ -75,8 +70,8 @@ if (typeof ffmpegStatic === 'string') {
 
 const CLIENT_ROTATION: readonly string[] = [
     'tv_simply,mweb,android,ios',
-    'mweb,tv_simply,android,ios',
-    'android,tv_simply,mweb,ios',
+    'web_embedded,tv_simply,android',
+    'mweb,tv_simply,ios,android',
 ];
 
 const POTOKEN_CLIENT_ROTATION: readonly string[] = [
@@ -109,7 +104,9 @@ function getAuthFlags(attempt = 1): string[] {
         flags.push('--extractor-args', `youtubepot-bgutilhttp:base_url=${config.POTOKEN_SERVER}`);
     }
 
-    if (cookieFilePath) flags.push('--cookies', cookieFilePath);
+    if (existsSync(COOKIES_FILE)) {
+        flags.push('--cookies', COOKIES_FILE);
+    }
     return flags;
 }
 
