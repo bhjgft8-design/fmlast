@@ -55,11 +55,19 @@ const RETRY_MAX_DELAY_MS = 8_000;
 
 const COOKIES_FILE = join(tmpdir(), `fm2_yt_cookies.txt`);
 
+// Prefer the system-installed Python yt-dlp (pip) over the npm-bundled standalone binary.
+// The npm binary CANNOT load external Python plugins (like the PO Token provider).
+// The pip-installed binary CAN, which is critical for Railway where we need PO Tokens.
 let ytdlpBinary = 'yt-dlp';
-if (ytdlExec) {
+const systemYtdlp = '/usr/local/bin/yt-dlp';
+if (existsSync(systemYtdlp)) {
+    ytdlpBinary = systemYtdlp;
+    console.log('[Youtube] Using system yt-dlp (pip) — plugin support enabled');
+} else if (ytdlExec) {
     const constants = (ytdlExec as any).constants || (ytdlExec as any).default?.constants;
     if (constants?.YOUTUBE_DL_PATH) {
         ytdlpBinary = constants.YOUTUBE_DL_PATH;
+        console.log('[Youtube] Using npm-bundled yt-dlp (no plugin support)');
     }
 }
 
@@ -101,14 +109,11 @@ function getAuthFlags(attempt = 1): string[] {
     const flags: string[] = ['--extractor-args', `youtube:${youtubeArgs.join(';')}`];
 
     if (config.POTOKEN_SERVER) {
-        // ESSENTIAL: The PO Token provider is a SEPARATE extractor in yt-dlp.
-        // We must pass its base_url using its specific prefix.
-        flags.push('--extractor-args', `youtubepot-bgutilhttp:base_url=${config.POTOKEN_SERVER}`);
-        
-        // Force yt-dlp to look for the plugin in our project root
-        flags.push('--plugin-dirs', process.cwd());
-        
-        console.log(`[Youtube] Linking PO Token Provider: ${config.POTOKEN_SERVER}`);
+        // The bgutil PO Token plugin (installed via pip) auto-loads.
+        // We just need to tell it where our Railway token server lives.
+        const baseUrl = config.POTOKEN_SERVER.replace(/\/$/, '');
+        flags.push('--extractor-args', `youtubepot-bgutilhttp:base_url=${baseUrl}`);
+        console.log(`[Youtube] PO Token Provider → ${baseUrl}`);
     }
 
     if (existsSync(COOKIES_FILE)) {
