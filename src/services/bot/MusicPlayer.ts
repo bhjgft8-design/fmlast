@@ -23,7 +23,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 
 // Railway/Production Cookie Sync & Sanitization:
-const COOKIES_FILE = join(tmpdir(), `fm2_yt_cookies.txt`);
+const COOKIES_FILE = '/tmp/fm2_yt_cookies.txt';
 const rawEnvCookie = process.env.YOUTUBE_COOKIES?.replace(/^["']|["']$/g, '').trim();
 
 console.log(`[MusicPlayer] 🔍 Checking for YOUTUBE_COOKIES env var... ${rawEnvCookie ? 'Found (length: ' + rawEnvCookie.length + ')' : 'NOT FOUND'}`);
@@ -39,8 +39,13 @@ if (rawEnvCookie) {
                     sanitized.push(line);
                     continue;
                 }
-                const fields = line.split('\t').length;
-                if (fields === 7) sanitized.push(line);
+                // Split on ANY whitespace (tabs OR spaces — Railway may convert tabs to spaces)
+                const parts = line.trim().split(/\s+/);
+                if (parts.length >= 7) {
+                    const [domain, flag, path, secure, expiry, name, ...valueParts] = parts;
+                    // Always rejoin with real tab characters
+                    sanitized.push([domain, flag, path, secure, expiry, name, valueParts.join('')].join('\t'));
+                }
             }
             cookieContent = sanitized.join('\n');
         } else {
@@ -184,7 +189,7 @@ export class MusicPlayer {
         if (queue) {
             this.stopProgressUpdate(guildId);
             if (queue.inactivityTimer) clearTimeout(queue.inactivityTimer);
-            
+
             queue.tracks = [];
             queue.isPlaying = false;
             queue.player?.stop();
@@ -226,7 +231,7 @@ export class MusicPlayer {
         if (queue.tracks.length === 0) {
             queue.isPlaying = false;
             this.stopProgressUpdate(guildId);
-            
+
             const endBuilder = new ComponentsV2()
                 .addText(`✅ **Queue concluded.** Disconnecting in 5 minutes if inactive.`);
             queue.textChannel.send(endBuilder.build()).catch(() => { });
@@ -253,7 +258,7 @@ export class MusicPlayer {
             console.log(`[MusicPlayer] 🎵 Fetching stream for: ${track.title}`);
 
             const { stream } = await Youtube.getAudioStream(track.url);
-            
+
             const resource = createAudioResource(stream, {
                 inputType: StreamType.OggOpus,
                 inlineVolume: true
@@ -266,7 +271,7 @@ export class MusicPlayer {
 
             // Render UI
             await this.sendPlaybackUI(guildId, track);
-            
+
             // Start progress updates
             this.startProgressUpdate(guildId);
 
@@ -302,7 +307,7 @@ export class MusicPlayer {
 
         const builder = new ComponentsV2()
             .setAccent(isPaused ? 0xFFA500 : 0x1DB954)
-            .addThumbnail(track.artworkUrl || track.thumbnail, 
+            .addThumbnail(track.artworkUrl || track.thumbnail,
                 `### 🎵 ${track.artistName || ''} - ${(track.trackTitle || track.title).replace(/\[.*?\]|\(.*?\)/g, '')}\n` +
                 `**${track.channelTitle}** ${track.statsText || ''}\n\n` +
                 `${progressBar} ${timeInfo}\n\n` +
