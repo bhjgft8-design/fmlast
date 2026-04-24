@@ -83,9 +83,9 @@ const CLIENT_ROTATION: readonly string[] = [
 ];
 
 const POTOKEN_CLIENT_ROTATION: readonly string[] = [
-    'ios,android,mweb',
-    'android,ios,mweb',
-    'mweb,ios,android',
+    'mweb,ios,android',   // attempt 1 (copy)  — mweb serves Opus (OGG-compatible)
+    'mweb,android,ios',   // attempt 2 (copy)  — mweb serves Opus (OGG-compatible)
+    'ios,android,mweb',   // attempt 3 (transcode) — any codec works, ios/android have best quality AAC
 ];
 
 function getPlayerClients(attempt = 1): string {
