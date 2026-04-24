@@ -97,7 +97,12 @@ if (existsSync(systemYtdlp)) {
 
 // Log cookie status at startup
 const startupCookie = process.env.YOUTUBE_COOKIES || process.env.YOUTUBE_COOKIE;
-console.log(`[Youtube] Cookie env var present: ${!!startupCookie}, length: ${startupCookie?.length ?? 0}`);
+if (startupCookie) {
+    const hasAuthCookie = startupCookie.includes('SAPISID') || startupCookie.includes('__Secure-3PAPISID');
+    console.log(`[Youtube] Cookie env var present: true, length: ${startupCookie.length}, Has SAPISID: ${hasAuthCookie}`);
+} else {
+    console.log(`[Youtube] Cookie env var present: false`);
+}
 ensureCookiesFile();
 
 let ffmpegBinary = 'ffmpeg';
@@ -152,6 +157,13 @@ function getAuthFlags(attempt = 1): string[] {
         const baseUrl = config.POTOKEN_SERVER.replace(/\/$/, '');
         flags.push('--extractor-args', `youtubepot-bgutilhttp:base_url=${baseUrl}`);
         console.log(`[Youtube] getAuthFlags: Linking PO Token Provider → ${baseUrl}`);
+
+        // Background check for token server reachability
+        if (attempt === 1) {
+            fetch(`${baseUrl}/get_pot`)
+                .then(r => { if (r.status !== 200) console.warn(`[Youtube] ⚠️ PO Token server returned status ${r.status}`); })
+                .catch(e => console.warn(`[Youtube] ⚠️ PO Token server UNREACHABLE: ${e.message}`));
+        }
     }
 
     const cookieExists = existsSync(COOKIES_FILE);
@@ -358,14 +370,10 @@ export class Youtube {
         let lastError: unknown;
         const sanitizedUrl = url.trim();
 
-        // Pre-check: does this video have an Opus stream available?
-        const hasOpus = await this.checkOpusAvailable(sanitizedUrl);
-        console.log(`[Youtube] Opus available for ${sanitizedUrl}: ${hasOpus}`);
-
         for (let attempt = 1; attempt <= STREAM_RETRY_ATTEMPTS; attempt++) {
-            // Attempt 1: Try copy mode (Opus) ONLY if it's confirmed available.
+            // Attempt 1: Try copy mode (Opus). If Opus isn't found, it falls back to bestaudio.
             // Attempt 2 & 3: Force transcode for absolute reliability.
-            const mode: StreamMode = (attempt === 1 && hasOpus) ? 'copy' : 'transcode';
+            const mode: StreamMode = attempt === 1 ? 'copy' : 'transcode';
             try {
                 const { stream, ready } = this.createYtdlpStream(sanitizedUrl, attempt, mode);
                 await ready;
@@ -386,34 +394,6 @@ export class Youtube {
         throw new Error(`Failed to get audio stream after ${STREAM_RETRY_ATTEMPTS} attempts: ${lastError}`);
     }
 
-    /**
-     * Rapidly probe for Opus availability without downloading the video.
-     */
-    private static async checkOpusAvailable(url: string): Promise<boolean> {
-        return new Promise((resolve) => {
-            ensureCookiesFile();
-            const args = [
-                url,
-                '-F',
-                '--no-warnings',
-                '--no-check-certificates',
-                '--ignore-config',
-                ...getAuthFlags(1),
-            ];
-            const proc = spawn(ytdlpBinary, args, { stdio: ['ignore', 'pipe', 'pipe'] });
-            let stdout = '';
-            proc.stdout!.on('data', (d: Buffer) => { stdout += d.toString(); });
-            proc.on('close', () => {
-                // 251 = Opus high, 250 = Opus medium, 249 = Opus low
-                const available = stdout.includes('251') || stdout.includes('250') || stdout.includes('opus');
-                resolve(available);
-            });
-            proc.on('error', () => resolve(false));
-            // Timeout safety to prevent hanging
-            setTimeout(() => { if (!proc.killed) proc.kill(); resolve(false); }, 10000);
-        });
-    }
-
     private static createYtdlpStream(
         url: string,
         attempt = 1,
@@ -421,11 +401,10 @@ export class Youtube {
     ): { stream: Readable; ready: Promise<void> } {
         const cookieFlags = getAuthFlags(attempt);
 
-        // Copy mode: STRICTOR Opus filter (251/250). 
-        // We MUST only copy Opus because OGG containers don't support AAC.
+        // Copy mode: Prefer Opus (251/250). Fallback to anything if Opus is missing.
         // Transcode mode: Grab anything playable.
         const formatSelector = mode === 'copy'
-            ? 'bestaudio[acodec=opus]/bestaudio[ext=webm][acodec=opus]/251/250'
+            ? 'bestaudio[acodec=opus]/bestaudio[ext=webm][acodec=opus]/251/250/bestaudio/best'
             : 'bestaudio/best';
 
         const ytdlpArgs = [
@@ -453,7 +432,12 @@ export class Youtube {
                 '-analyzeduration', String(FFMPEG_ANALYZE_DURATION_COPY),
                 '-probesize', String(FFMPEG_PROBE_SIZE_COPY),
                 '-i', 'pipe:0',
-                '-vn', '-map', 'a:0', '-c:a', 'copy', '-f', 'ogg', '-loglevel', 'error', 'pipe:1',
+                '-vn', '-map', 'a:0',
+                // For Copy Mode, we try to transcode anyway to be safe (high quality libopus),
+                // as bitstream-copying AAC into OGG is impossible.
+                '-c:a', 'libopus', '-ar', '48000', '-ac', '2', '-b:a', '128k',
+                '-vbr', 'on', '-application', 'audio', '-frame_duration', '20',
+                '-f', 'ogg', '-loglevel', 'error', 'pipe:1',
             ]
             : [
                 '-analyzeduration', String(FFMPEG_ANALYZE_DURATION_TRANSCODE),
