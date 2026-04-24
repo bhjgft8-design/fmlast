@@ -105,9 +105,9 @@ const CLIENT_ROTATION: readonly string[] = [
 // On Railway, tv_simply is the most reliable client.
 // We rotate to others if it fails or is throttled.
 const POTOKEN_CLIENT_ROTATION: readonly string[] = [
-    'tv_simply,ios,android',   // Attempt 1: Safest for cloud IPs (transcode fallback)
-    'web_safari,ios,android',  // Attempt 2: Best for Opus (enables copy mode)
-    'ios,android,tv_simply',   // Attempt 3: Transcode fallback
+    'mweb,ios,android',        // Attempt 1: Standard mobile web (enables copy mode)
+    'tv_simply,ios,android',   // Attempt 2: Safest for cloud IPs (bypass check)
+    'ios,android,tv_simply',   // Attempt 3: Standard mobile (transcode fallback)
 ];
 
 function getPlayerClients(attempt = 1): string {
@@ -121,15 +121,6 @@ function getAuthFlags(attempt = 1): string[] {
 
     if (config.YT_VISITOR_DATA) {
         youtubeArgs.push(`visitor_data=${config.YT_VISITOR_DATA}`);
-
-        // Only skip webpage for clients that don't need it (mobile/TV).
-        // Web clients (safari, mweb) NEED the webpage to get the PO Token challenge.
-        const clients = getPlayerClients(attempt);
-        const needsWebpage = clients.includes('web') || clients.includes('default');
-        
-        if (!needsWebpage) {
-            youtubeArgs.push('player_skip=webpage,configs');
-        }
     }
 
     const flags: string[] = ['--extractor-args', `youtube:${youtubeArgs.join(';')}`];
@@ -373,10 +364,10 @@ export class Youtube {
     ): { stream: Readable; ready: Promise<void> } {
         const cookieFlags = getAuthFlags(attempt);
 
-        // Copy mode: Prefer high-quality 48kHz Opus (251/250).
-        // Transcode mode: Grab best available.
+        // Copy mode: Prefer Opus (itag 251/250).
+        // Transcode mode: Grab best audio.
         const formatSelector = mode === 'copy'
-            ? 'bestaudio[acodec=opus][asr=48000]/bestaudio[acodec=opus]/251/250'
+            ? 'bestaudio[acodec=opus]/251/250'
             : 'bestaudio/best';
 
         const ytdlpArgs = [
