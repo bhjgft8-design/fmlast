@@ -53,7 +53,34 @@ const STREAM_RETRY_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 500;
 const RETRY_MAX_DELAY_MS = 8_000;
 
-const COOKIES_FILE = join(tmpdir(), `fm2_yt_cookies.txt`);
+const COOKIES_FILE = '/tmp/fm2_yt_cookies.txt';
+
+function ensureCookiesFile(): void {
+    const raw = process.env.YOUTUBE_COOKIES || process.env.YOUTUBE_COOKIE;
+    if (!raw) return;
+    
+    // If it exists and is not empty, we are good
+    if (existsSync(COOKIES_FILE)) return;
+
+    try {
+        let content = raw.replace(/^["']|["']$/g, '').trim();
+        if (!content.startsWith('# Netscape')) {
+            const lines = ['# Netscape HTTP Cookie File'];
+            for (const part of content.split(';')) {
+                const eq = part.indexOf('=');
+                if (eq < 0) continue;
+                const name = part.slice(0, eq).trim();
+                const value = part.slice(eq + 1).trim();
+                if (name) lines.push(`.youtube.com\tTRUE\t/\tFALSE\t0\t${name}\t${value}`);
+            }
+            content = lines.join('\n');
+        }
+        writeFileSync(COOKIES_FILE, content, { mode: 0o600 });
+        console.log('[Youtube] Failsafe: Cookies file created/restored');
+    } catch (err) {
+        console.error('[Youtube] Failed to ensure cookies file:', err);
+    }
+}
 
 let ytdlpBinary = 'yt-dlp';
 const systemYtdlp = '/usr/local/bin/yt-dlp';
@@ -68,27 +95,10 @@ if (existsSync(systemYtdlp)) {
     }
 }
 
-// Write YOUTUBE_COOKIES to a file for yt-dlp to use (Sync with MusicPlayer.ts)
-const rawEnvCookie = process.env.YOUTUBE_COOKIES || process.env.YOUTUBE_COOKIE;
-if (rawEnvCookie) {
-    try {
-        let cookieContent = rawEnvCookie.replace(/^["']|["']$/g, '').trim();
-        if (!cookieContent.startsWith('# Netscape')) {
-            const lines = ['# Netscape HTTP Cookie File'];
-            for (const part of cookieContent.split(';')) {
-                const eq = part.indexOf('=');
-                if (eq < 0) continue;
-                const name = part.slice(0, eq).trim();
-                const value = part.slice(eq + 1).trim();
-                if (name) lines.push(`.youtube.com\tTRUE\t/\tFALSE\t0\t${name}\t${value}`);
-            }
-            cookieContent = lines.join('\n');
-        }
-        writeFileSync(COOKIES_FILE, cookieContent);
-    } catch (err) {
-        console.error('[Youtube] Failed to write cookies:', err);
-    }
-}
+// Log cookie status at startup
+const startupCookie = process.env.YOUTUBE_COOKIES || process.env.YOUTUBE_COOKIE;
+console.log(`[Youtube] Cookie env var present: ${!!startupCookie}, length: ${startupCookie?.length ?? 0}`);
+ensureCookiesFile();
 
 let ffmpegBinary = 'ffmpeg';
 if (typeof ffmpegStatic === 'string') {
@@ -116,6 +126,8 @@ function getPlayerClients(attempt = 1): string {
 }
 
 function getAuthFlags(attempt = 1): string[] {
+    ensureCookiesFile(); // Guarantee file exists before any flags are generated
+
     const youtubeArgs: string[] = [`player_client=${getPlayerClients(attempt)}`];
 
     if (config.YT_VISITOR_DATA) {
@@ -139,11 +151,15 @@ function getAuthFlags(attempt = 1): string[] {
         // We just need to tell it where our Railway token server lives.
         const baseUrl = config.POTOKEN_SERVER.replace(/\/$/, '');
         flags.push('--extractor-args', `youtubepot-bgutilhttp:base_url=${baseUrl}`);
-        console.log(`[Youtube] PO Token Provider → ${baseUrl}`);
+        console.log(`[Youtube] getAuthFlags: Linking PO Token Provider → ${baseUrl}`);
     }
 
-    if (existsSync(COOKIES_FILE)) {
+    const cookieExists = existsSync(COOKIES_FILE);
+    if (cookieExists) {
         flags.push('--cookies', COOKIES_FILE);
+        console.log(`[Youtube] getAuthFlags: Using cookies file ✓ (${COOKIES_FILE})`);
+    } else {
+        console.warn(`[Youtube] getAuthFlags: ⚠️ Cookies file NOT found — yt-dlp will run unauthenticated!`);
     }
 
     return flags;
