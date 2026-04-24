@@ -154,15 +154,26 @@ function getAuthFlags(attempt = 1): string[] {
     if (config.POTOKEN_SERVER) {
         // The bgutil PO Token plugin (installed via pip) auto-loads.
         // We just need to tell it where our Railway token server lives.
-        const baseUrl = config.POTOKEN_SERVER.replace(/\/$/, '');
+        let baseUrl = config.POTOKEN_SERVER.replace(/\/$/, '');
+        
+        // Defensive: ensure scheme is present
+        if (!baseUrl.startsWith('http://') && !baseUrl.startsWith('https://')) {
+            baseUrl = `https://${baseUrl}`;
+            console.warn(`[Youtube] ⚠️ POTOKEN_SERVER was missing https://, auto-corrected to: ${baseUrl}`);
+        }
+
         flags.push('--extractor-args', `youtubepot-bgutilhttp:base_url=${baseUrl}`);
         console.log(`[Youtube] getAuthFlags: Linking PO Token Provider → ${baseUrl}`);
 
-        // Background check for token server reachability
+        // Background check for token server reachability (hit the root)
         if (attempt === 1) {
-            fetch(`${baseUrl}/get_pot`)
-                .then(r => { if (r.status !== 200) console.warn(`[Youtube] ⚠️ PO Token server returned status ${r.status}`); })
-                .catch(e => console.warn(`[Youtube] ⚠️ PO Token server UNREACHABLE: ${e.message}`));
+            fetch(baseUrl)
+                .then(r => { 
+                    if (r.status !== 200 && r.status !== 405) { // 405 is fine (method not allowed)
+                        console.warn(`[Youtube] ⚠️ PO Token server (${baseUrl}) returned status ${r.status}`); 
+                    }
+                })
+                .catch(e => console.warn(`[Youtube] ⚠️ PO Token server (${baseUrl}) UNREACHABLE: ${e.message}`));
         }
     }
 
