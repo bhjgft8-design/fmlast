@@ -82,10 +82,13 @@ const CLIENT_ROTATION: readonly string[] = [
     'mweb,tv_simply,android,ios',
 ];
 
+// With a PO token server, use clients that serve Opus (itag 251/250).
+// `default` (web) and `web_safari` return the richest format set including Opus.
+// `ios`/`android` only serve AAC, which can't be copied into OGG.
 const POTOKEN_CLIENT_ROTATION: readonly string[] = [
-    'ios,android,mweb',   // attempt 1 — ios/android don't trigger webpage bot-check
-    'android,ios,mweb',   // attempt 2
-    'mweb,ios,android',   // attempt 3
+    'default,web_safari,tv_embedded',   // attempt 1 — Opus available for copy mode
+    'web_safari,default,mweb',          // attempt 2 — Opus available for copy mode
+    'tv_embedded,web_safari,default',   // attempt 3 — transcode fallback
 ];
 
 function getPlayerClients(attempt = 1): string {
@@ -315,8 +318,8 @@ export class Youtube {
         const sanitizedUrl = url.trim();
 
         for (let attempt = 1; attempt <= STREAM_RETRY_ATTEMPTS; attempt++) {
-            // Always transcode: ios/android serve AAC which can't be muxed into OGG without re-encoding.
-            const mode: StreamMode = 'transcode';
+            // Copy mode first (zero quality loss). Falls back to transcode on last attempt.
+            const mode: StreamMode = attempt < STREAM_RETRY_ATTEMPTS ? 'copy' : 'transcode';
             try {
                 const { stream, ready } = this.createYtdlpStream(sanitizedUrl, attempt, mode);
                 await ready;
@@ -344,11 +347,12 @@ export class Youtube {
     ): { stream: Readable; ready: Promise<void> } {
         const cookieFlags = getAuthFlags(attempt);
 
-        // Copy mode: prefer Opus (OGG-compatible). AAC cannot be muxed into OGG without transcoding.
-        // Transcode mode: grab anything and re-encode to Opus.
+        // Copy mode: Opus at 48 kHz only (itag 251/250). Discord voice is 48 kHz stereo;
+        // passing non-48 kHz Opus produces garbled playback. Zero quality loss.
+        // Transcode mode: any audio source, re-encoded to Opus.
         const formatSelector = mode === 'copy'
-            ? 'bestaudio[acodec=opus]/bestaudio'
-            : 'bestaudio/best';
+            ? 'bestaudio[acodec=opus][asr=48000]/251/250'
+            : 'bestaudio[acodec=opus][asr=48000]/bestaudio[abr>=96]/bestaudio[ext=m4a]/bestaudio';
 
         const ytdlpArgs = [
             url,
