@@ -157,11 +157,12 @@ function getAuthFlags(attempt = 1): string[] {
 
     // IMPORTANT: On Railway, fetching the webpage for mobile/TV clients 
     // triggers an instant 403 "Sign in" block. We MUST skip it.
-    // We only allow it for web clients that need it for PO Tokens.
+    // HOWEVER: If we have a PO Token server, we MUST NOT skip it, because
+    // the plugin needs the webpage to generate the token!
     const clients = getPlayerClients(attempt);
     const isWebClient = clients.includes('web') || clients.includes('default');
     
-    if (!isWebClient) {
+    if (!isWebClient && !config.POTOKEN_SERVER) {
         youtubeArgs.push('player_skip=webpage,configs');
     }
 
