@@ -20,6 +20,20 @@ import { config } from '../../../config';
 import fs from 'fs';
 import path from 'path';
 
+// Railway/Production Cookie Sync:
+// If YOUTUBE_COOKIES is set in env, write it to cookies.txt in the root
+const COOKIES_FILE = path.join(process.cwd(), 'cookies.txt');
+if (process.env.YOUTUBE_COOKIES) {
+    try {
+        fs.writeFileSync(COOKIES_FILE, process.env.YOUTUBE_COOKIES, { encoding: 'utf8', mode: 0o600 });
+        console.log('[MusicPlayer] 🍪 Synchronized cookies.txt from environment variable.');
+    } catch (err) {
+        console.error('[MusicPlayer] ❌ Failed to write cookies.txt:', err);
+    }
+} else if (!fs.existsSync(COOKIES_FILE)) {
+    console.warn('[MusicPlayer] ⚠️ No cookies.txt found and YOUTUBE_COOKIES env var is missing. Playback may fail.');
+}
+
 export interface GuildQueue {
     textChannel: TextChannel;
     voiceChannelId: string;

@@ -71,9 +71,9 @@ if (typeof ffmpegStatic === 'string') {
 }
 
 const CLIENT_ROTATION: readonly string[] = [
-    'default,mweb,ios',
-    'mweb,default,ios',
-    'ios,mweb,default',
+    'tv_simply,mweb,ios',
+    'mweb,tv_simply,ios',
+    'ios,mweb,tv_simply',
 ];
 
 const POTOKEN_CLIENT_ROTATION: readonly string[] = [
