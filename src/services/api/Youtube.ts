@@ -358,10 +358,14 @@ export class Youtube {
         let lastError: unknown;
         const sanitizedUrl = url.trim();
 
+        // Pre-check: does this video have an Opus stream available?
+        const hasOpus = await this.checkOpusAvailable(sanitizedUrl);
+        console.log(`[Youtube] Opus available for ${sanitizedUrl}: ${hasOpus}`);
+
         for (let attempt = 1; attempt <= STREAM_RETRY_ATTEMPTS; attempt++) {
-            // Attempt 1: Try copy mode (Opus) using the robust tv_simply client.
+            // Attempt 1: Try copy mode (Opus) ONLY if it's confirmed available.
             // Attempt 2 & 3: Force transcode for absolute reliability.
-            const mode: StreamMode = attempt === 1 ? 'copy' : 'transcode';
+            const mode: StreamMode = (attempt === 1 && hasOpus) ? 'copy' : 'transcode';
             try {
                 const { stream, ready } = this.createYtdlpStream(sanitizedUrl, attempt, mode);
                 await ready;
@@ -380,6 +384,34 @@ export class Youtube {
         }
 
         throw new Error(`Failed to get audio stream after ${STREAM_RETRY_ATTEMPTS} attempts: ${lastError}`);
+    }
+
+    /**
+     * Rapidly probe for Opus availability without downloading the video.
+     */
+    private static async checkOpusAvailable(url: string): Promise<boolean> {
+        return new Promise((resolve) => {
+            ensureCookiesFile();
+            const args = [
+                url,
+                '-F',
+                '--no-warnings',
+                '--no-check-certificates',
+                '--ignore-config',
+                ...getAuthFlags(1),
+            ];
+            const proc = spawn(ytdlpBinary, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+            let stdout = '';
+            proc.stdout!.on('data', (d: Buffer) => { stdout += d.toString(); });
+            proc.on('close', () => {
+                // 251 = Opus high, 250 = Opus medium, 249 = Opus low
+                const available = stdout.includes('251') || stdout.includes('250') || stdout.includes('opus');
+                resolve(available);
+            });
+            proc.on('error', () => resolve(false));
+            // Timeout safety to prevent hanging
+            setTimeout(() => { if (!proc.killed) proc.kill(); resolve(false); }, 10000);
+        });
     }
 
     private static createYtdlpStream(
