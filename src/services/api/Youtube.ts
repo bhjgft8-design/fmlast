@@ -346,12 +346,9 @@ export class Youtube {
     ): { stream: Readable; ready: Promise<void> } {
         const cookieFlags = getAuthFlags(attempt);
 
-        // Copy mode: Opus at 48 kHz only (itag 251/250). Discord voice is 48 kHz stereo;
-        // passing non-48 kHz Opus produces garbled playback. Zero quality loss.
-        // Transcode mode: any audio source, re-encoded to Opus.
-        const formatSelector = mode === 'copy'
-            ? 'bestaudio[acodec=opus][asr=48000]/251/250'
-            : 'bestaudio[acodec=opus][asr=48000]/bestaudio[abr>=96]/bestaudio[ext=m4a]/bestaudio';
+        // Since we always transcode on Railway (ios/android → AAC → Opus),
+        // just grab the best audio available. No codec/sample-rate filters needed.
+        const formatSelector = 'bestaudio/best';
 
         const ytdlpArgs = [
             url,
