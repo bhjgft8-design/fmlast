@@ -254,11 +254,22 @@ export class Spotify {
                     params: {
                         q: `artist:${artistName} track:${trackName}`,
                         type: 'track',
-                        limit: 1,
+                        limit: 3,
                     },
                 });
 
-                const track = data.tracks?.items?.[0];
+                const tracks = data.tracks?.items || [];
+                const overrideId = ArtistMetadataService.getSpotifyId(artistName);
+
+                const track = tracks.find((t: any) => {
+                    const titleMatch = this.validateTitle(trackName, t.name);
+                    const artistMatch = t.artists?.some((a: any) => {
+                        if (overrideId) return a.id === overrideId;
+                        return this.validateArtist(artistName, a.name);
+                    });
+                    return titleMatch && artistMatch;
+                }) || tracks[0];
+
                 return {
                     coverUrl: track?.album?.images?.[0]?.url || null,
                     trackUrl: track?.external_urls?.spotify || null,

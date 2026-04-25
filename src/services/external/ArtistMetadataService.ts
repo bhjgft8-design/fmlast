@@ -20,6 +20,11 @@ export class ArtistMetadataService {
             appleMusicId: '1793783460',
             geniusId: 4440630,
             disableDeezer: true
+        },
+        'cigarettes after sex': {
+            spotifyId: '1mSdbKo7mY79YvS9989vpI',
+            appleMusicId: '528258529',
+            geniusId: 457194
         }
     };
 
