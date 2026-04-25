@@ -214,7 +214,7 @@ function getAuthFlags(attempt = 1): string[] {
     
     // Only skip webpage for non-web clients. 
     // Web clients (Attempt 1) NEED the webpage for PO Token generation.
-    if (!isWebClient && !config.POTOKEN_SERVER) {
+    if (!isWebClient) {
         youtubeArgs.push('player_skip=webpage,configs');
     }
 
@@ -235,9 +235,8 @@ function getAuthFlags(attempt = 1): string[] {
         if (attempt === 3) {
             console.log(`[Youtube] ⚠️ Final attempt: Trying WITHOUT PO Token provider for stability`);
             return [
-                '--extractor-args', 'youtube:player_client=ios,android',
+                '--extractor-args', 'youtube:player_client=ios,android;player_skip=webpage,configs',
                 '--cookies', COOKIES_FILE,
-                '--js-runtimes', 'node',
                 '--no-check-certificates'
             ];
         }
