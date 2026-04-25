@@ -5,6 +5,7 @@ import { config } from '../config';
 import { initBotProfile } from './services/bot/BotProfile';
 import { PuppeteerService } from './services/external/PuppeteerService';
 import { LoggerService } from './services/bot/LoggerService';
+import http from 'http';
 
 const client = new Client({
     intents: [
@@ -32,6 +33,12 @@ async function bootstrap() {
 
     // 5. Post-Login Initialization
     await initBotProfile();
+
+    // 6. Simple Health Check for Railway
+    http.createServer((req, res) => {
+        res.writeHead(200);
+        res.end('Bot is alive');
+    }).listen(process.env.PORT || 3000);
 }
 
 bootstrap().catch(err => {

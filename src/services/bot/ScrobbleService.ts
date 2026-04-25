@@ -43,8 +43,6 @@ export class ScrobbleService {
         const successCount = results.filter(r => r.status === 'fulfilled').length;
         const failures = results.filter((r): r is PromiseRejectedResult => r.status === 'rejected');
 
-        console.log(`[Scrobble] Processed scrobble for ${successCount}/${users.length} users: ${track.artist} - ${track.track}`);
-        
         for (const fail of failures) {
             console.error(`[Scrobble] Scrobble failed:`, fail.reason?.message || fail.reason);
         }

@@ -819,18 +819,30 @@ export async function handleInteraction(interaction: Interaction, client: Client
         return;
     }
 
-    // ── Player Controls ──
     if (interaction.isButton() && interaction.customId.startsWith('mp-')) {
         const [action, gId] = interaction.customId.substring(3).split(':');
         const { MusicPlayer } = await import('../services/bot/MusicPlayer');
-        if (action === 'pause') {
-            const queue = MusicPlayer.getQueue(gId);
-            if (queue.isPaused) MusicPlayer.resume(gId); else MusicPlayer.pause(gId);
-            await interaction.reply({ content: queue.isPaused ? '▶️ Resumed' : '⏸️ Paused', ephemeral: true });
+        const { QueueManager } = await import('../services/bot/QueueManager');
+        
+        if (action === 'pause' || action === 'resume') {
+            const queue = QueueManager.getQueue(gId);
+            if (action === 'resume') MusicPlayer.resume(gId); else MusicPlayer.pause(gId);
+            await interaction.deferUpdate();
         } else if (action === 'skip') {
-            MusicPlayer.skip(gId); await interaction.reply({ content: '⏭️ Skipped', ephemeral: true });
+            MusicPlayer.skip(gId);
+            await interaction.deferUpdate();
         } else if (action === 'stop') {
-            MusicPlayer.stop(gId); await interaction.reply({ content: '🛑 Stopped', ephemeral: true });
+            MusicPlayer.stop(gId);
+            await interaction.deferUpdate();
+        } else if (action === 'repeat') {
+            const queue = QueueManager.getQueue(gId);
+            if (queue) {
+                const modes: any[] = ['off', 'one', 'all'];
+                const next = modes[(modes.indexOf(queue.repeatMode) + 1) % modes.length];
+                queue.repeatMode = next;
+                MusicPlayer.updateNowPlayingMessage(gId);
+            }
+            await interaction.deferUpdate();
         }
         return;
     }

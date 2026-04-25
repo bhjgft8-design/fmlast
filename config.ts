@@ -2,7 +2,7 @@ import 'dotenv/config';
 
 export const config = {
     DISCORD_TOKEN: process.env.DISCORD_TOKEN!,
-    PREFIX: '+',                    // change if you want another prefix
+    PREFIX: '-',                    // change if you want another prefix
     CLIENT_ID: process.env.DISCORD_CLIENT_ID!, // we'll get this in a second
     LASTFM_API_KEY: process.env.LASTFM_API_KEY!,
     LASTFM_API_SECRET: process.env.LASTFM_API_SECRET!,
@@ -22,5 +22,6 @@ export const config = {
     POTOKEN_SERVER: process.env.POTOKEN_SERVER,
     YT_METADATA_TIMEOUT_MS: 20000,
     YT_STREAM_TIMEOUT_MS: 30000,
+    YT_PLAYLIST_TIMEOUT_MS: 30000,
     INACTIVITY_TIMEOUT: 300, // 5 minutes
 };

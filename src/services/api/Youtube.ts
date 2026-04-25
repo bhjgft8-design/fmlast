@@ -54,6 +54,16 @@ const STREAM_RETRY_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 500;
 const RETRY_MAX_DELAY_MS = 8_000;
 
+function summarizeYtdlpError(stderr: string): string {
+    const trimmed = stderr.trim();
+    if (!trimmed) return '';
+    const errorLine = trimmed
+        .split('\n')
+        .map((l) => l.trim())
+        .find((l) => l.startsWith('ERROR:'));
+    return errorLine || trimmed.split('\n').slice(-3).join(' | ');
+}
+
 const COOKIES_FILE = '/tmp/fm2_yt_cookies.txt';
 
 function ensureCookiesFile(): void {
@@ -396,7 +406,8 @@ export class Youtube {
             proc.on('close', (code) => {
                 clearTimeout(timeout);
                 if (code !== 0) {
-                    reject(new Error(`yt-dlp metadata failed (code ${code}): ${stderr}`));
+                    const detail = summarizeYtdlpError(stderr);
+                    reject(new Error(`yt-dlp metadata failed (code ${code}): ${detail}`));
                     return;
                 }
                 try {
@@ -425,6 +436,74 @@ export class Youtube {
 
         metadataCache.set(url, { song, expiresAt: Date.now() + CACHE_TTL_MS });
         return song;
+    }
+
+    static async getPlaylistInfo(url: string): Promise<{ title: string; songs: YoutubeResult[] }> {
+        const cookieFlags = getAuthFlags();
+
+        const result = await new Promise<any>((resolve, reject) => {
+            const args = [
+                url,
+                '--dump-single-json',
+                '--flat-playlist',
+                '--no-warnings',
+                '--no-check-certificates',
+                '--playlist-items', '1:100',
+                ...cookieFlags,
+            ];
+
+            const proc = spawn(ytdlpBinary, args, { stdio: ['ignore', 'pipe', 'pipe'] });
+            const stdoutChunks: Buffer[] = [];
+            let stderr = '';
+
+            const timeout = setTimeout(() => {
+                if (!proc.killed) {
+                    proc.kill('SIGKILL');
+                    reject(new Error(`yt-dlp playlist timed out after ${config.YT_PLAYLIST_TIMEOUT_MS}ms`));
+                }
+            }, config.YT_PLAYLIST_TIMEOUT_MS);
+
+            proc.stdout!.on('data', (d: Buffer) => {
+                stdoutChunks.push(d);
+            });
+            proc.stderr!.on('data', (d: Buffer) => {
+                stderr += d.toString();
+            });
+
+            proc.on('close', (code) => {
+                clearTimeout(timeout);
+                if (code !== 0) {
+                    const detail = summarizeYtdlpError(stderr);
+                    reject(new Error(`yt-dlp playlist failed (code ${code}): ${detail}`));
+                    return;
+                }
+                try {
+                    resolve(JSON.parse(Buffer.concat(stdoutChunks).toString()));
+                } catch {
+                    reject(new Error('Failed to parse yt-dlp playlist JSON output'));
+                }
+            });
+
+            proc.on('error', (err: Error) => {
+                clearTimeout(timeout);
+                reject(new Error(`Failed to spawn yt-dlp: ${err.message}`));
+            });
+        });
+
+        const playlistTitle = result.title || 'Unknown Playlist';
+        const entries = result.entries || [];
+
+        const songs: YoutubeResult[] = entries.map((entry: any) => ({
+            title: entry.title || 'Unknown Title',
+            url: entry.url?.startsWith('http') ? entry.url : `https://www.youtube.com/watch?v=${entry.url || entry.id}`,
+            id: entry.id || entry.url || '',
+            durationSeconds: entry.duration || 0,
+            duration: formatDuration(entry.duration || 0),
+            thumbnail: entry.thumbnails?.[0]?.url || entry.thumbnail || '',
+            channelTitle: entry.uploader || entry.channel || 'Unknown Channel',
+        }));
+
+        return { title: playlistTitle, songs };
     }
 
     static async getAudioStream(url: string): Promise<AudioStreamResult> {
@@ -502,11 +581,10 @@ export class Youtube {
     ): { stream: Readable; ready: Promise<void> } {
         const cookieFlags = getAuthFlags(attempt);
 
-        // Copy mode: Prefer Opus (251/250). Fallback to anything if Opus is missing.
-        // Transcode mode: Grab anything playable.
-        const formatSelector = mode === 'copy'
-            ? 'bestaudio[acodec=opus]/bestaudio[ext=webm][acodec=opus]/251/250/bestaudio/best'
-            : 'bestaudio/best';
+        const formatSelector =
+            mode === 'copy'
+                ? 'bestaudio[acodec=opus][asr=48000]/251/250'
+                : 'bestaudio[acodec=opus][asr=48000]/bestaudio[abr>=96]/bestaudio[ext=m4a]/bestaudio';
 
         const ytdlpArgs = [
             url,
@@ -517,17 +595,11 @@ export class Youtube {
             '--no-progress',
             '--no-check-certificates',
             '--buffer-size', '512K',
-            '--http-chunk-size', '1M', // Hardens against throttling on long videos
             '-N', String(YTDLP_CONCURRENT_FRAGMENTS),
             '--throttled-rate', YTDLP_THROTTLED_RATE,
-            '-R', '5', // Increased retries
-            '--fragment-retries', '5',
-            '--file-access-retries', '5',
-            '--socket-timeout', '30', // Increased timeout for stability
+            '-R', '3',
+            '--socket-timeout', '15',
             '--extractor-retries', '3',
-            '--force-ipv4',
-            '--ignore-config',
-            '--no-mtime',
             ...cookieFlags,
         ];
 
@@ -537,11 +609,10 @@ export class Youtube {
                 '-probesize', String(FFMPEG_PROBE_SIZE_COPY),
                 '-i', 'pipe:0',
                 '-vn', '-map', 'a:0',
-                // For Copy Mode, we try to transcode anyway to be safe (high quality libopus),
-                // as bitstream-copying AAC into OGG is impossible.
-                '-c:a', 'libopus', '-ar', '48000', '-ac', '2', '-b:a', '128k',
-                '-vbr', 'on', '-application', 'audio', '-frame_duration', '20',
-                '-f', 'ogg', '-loglevel', 'error', 'pipe:1',
+                '-c:a', 'copy',
+                '-f', 'ogg',
+                '-loglevel', 'error',
+                'pipe:1',
             ]
             : [
                 '-analyzeduration', String(FFMPEG_ANALYZE_DURATION_TRANSCODE),

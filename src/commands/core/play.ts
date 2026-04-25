@@ -7,7 +7,7 @@ import { Deezer } from '../../services/api/Deezer';
 import { prisma } from '../../database/client';
 import { SlashCommandBuilder, TextChannel, GuildMember } from 'discord.js';
 import { ComponentsV2 } from '../../utils/ComponentsV2';
-import { TrackResolverService } from '../../services/api/TrackResolverService';
+import { MetadataService } from '../../services/bot/MetadataService';
 
 export default class PlayCommand extends BaseCommand {
     name = 'play';
@@ -42,17 +42,19 @@ export default class PlayCommand extends BaseCommand {
         const dbUser = await prisma.user.findUnique({ where: { discordId: member.id } });
 
         try {
-            // 1. Detect Spotify Links
+            // 1. Detect Spotify & YouTube Links
             const spotifyTrackRegex = /(?:https?:\/\/)?open\.spotify\.com\/track\/([a-zA-Z0-9]+)(?:\?.*)?/;
             const spotifyAlbumRegex = /(?:https?:\/\/)?open\.spotify\.com\/album\/([a-zA-Z0-9]+)(?:\?.*)?/;
             const spotifyPlaylistRegex = /(?:https?:\/\/)?open\.spotify\.com\/playlist\/([a-zA-Z0-9]+)(?:\?.*)?/;
+            const youtubePlaylistRegex = /(?:https?:\/\/)?(?:www\.)?youtube\.com\/playlist\?list=([a-zA-Z0-9_-]+)/;
 
-            let tracksToProcess: { name: string; artist: string }[] = [];
+            let tracksToProcess: { name: string; artist: string; url?: string }[] = [];
             let collectionName = '';
 
             const trackMatch = query.match(spotifyTrackRegex);
             const albumMatch = query.match(spotifyAlbumRegex);
             const playlistMatch = query.match(spotifyPlaylistRegex);
+            const ytPlaylistMatch = query.match(youtubePlaylistRegex);
 
             if (trackMatch) {
                 const meta = await Spotify.getTrackMetadataById(trackMatch[1]);
@@ -65,6 +67,10 @@ export default class PlayCommand extends BaseCommand {
                 const tracks = await Spotify.getPlaylistTracks(playlistMatch[1]);
                 tracksToProcess = tracks;
                 collectionName = 'Playlist';
+            } else if (ytPlaylistMatch) {
+                const playlist = await Youtube.getPlaylistInfo(query);
+                tracksToProcess = playlist.songs.map(s => ({ name: s.title, artist: s.channelTitle, url: s.url }));
+                collectionName = `YouTube Playlist (${playlist.title})`;
             } else if (!query) {
                 // If no query, try to find user's current track from Last.fm
                 if (dbUser?.lastfmUsername) {
@@ -159,69 +165,21 @@ export default class PlayCommand extends BaseCommand {
     /**
      * Helper to resolve a track name/artist to a YouTube result and add to queue
      */
-    private async resolveAndQueue(guildId: string, name: string, artist: string, member: GuildMember, dbUser: any): Promise<{ position: number; artist: string; track: string; artworkUrl: string | null } | null> {
-        const query = artist ? `${artist} - ${name}` : name;
+    private async resolveAndQueue(guildId: string, name: string, artist: string, member: GuildMember, dbUser: any, existingUrl?: string): Promise<{ position: number; artist: string; track: string; artworkUrl: string | null } | null> {
+        const query = existingUrl || (artist ? `${artist} - ${name}` : name);
         const result = await Youtube.search(query);
         if (!result) return null;
 
-        // Resolve High-Res Artwork
-        let finalArtist = artist;
-        let finalTrack = name;
-        if (!finalArtist || !finalTrack) {
-            if (result.title.includes(' - ')) {
-                const parts = result.title.split(' - ');
-                finalArtist = parts[0].trim();
-                finalTrack = parts[1].trim().replace(/\(.*\)|\[.*\]/g, '').trim();
-            } else {
-                finalTrack = result.title;
-                finalArtist = result.channelTitle.replace(' - Topic', '');
-            }
-        }
-
-        // ── GLOBAL RESOLUTION (UTR) ──
-        const resolved = await TrackResolverService.resolve(finalArtist, finalTrack);
-
-        finalArtist = resolved.artist;
-        finalTrack = resolved.title;
-        const artworkUrl = resolved.artworkUrl;
-
-        let finalDuration = result.duration;
-        if (resolved.durationMs > 0) {
-            const totalSeconds = Math.floor(resolved.durationMs / 1000);
-            result.durationSeconds = totalSeconds;
-            const minutes = Math.floor(totalSeconds / 60);
-            const seconds = totalSeconds % 60;
-            finalDuration = `${minutes}:${seconds.toString().padStart(2, '0')}`;
-        }
-
-        // Fetch extra stats from Last.fm
-        let statsText = '';
-        try {
-            const lfmInfo = await LastFM.getTrackInfo(finalArtist, finalTrack, dbUser?.lastfmUsername, dbUser?.lastfmSessionKey);
-            const listeners = lfmInfo?.listeners ? parseInt(lfmInfo.listeners).toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 1 }) : null;
-            const plays = lfmInfo?.playcount ? parseInt(lfmInfo.playcount).toLocaleString('en-US', { notation: 'compact', maximumFractionDigits: 1 }) : null;
-
-            const parts = [];
-            if (finalDuration) parts.push(finalDuration);
-            if (listeners) parts.push(`${listeners} listeners`);
-            if (plays) parts.push(`${plays} plays`);
-            if (parts.length > 0) statsText = `\n${parts.join(' • ')}`;
-        } catch { }
-
-        result.artistName = finalArtist;
-        result.trackTitle = finalTrack;
-        result.artworkUrl = artworkUrl ?? undefined;
-        result.statsText = statsText;
-        result.requesterName = member.user.displayName;
-        if (finalDuration) result.duration = finalDuration;
+        // Enrich track with metadata
+        await MetadataService.enrich(result, member, dbUser);
 
         const queuePos = await MusicPlayer.play(guildId, result);
 
         return {
             position: queuePos,
-            artist: finalArtist,
-            track: finalTrack,
-            artworkUrl: artworkUrl
+            artist: result.artistName!,
+            track: result.trackTitle!,
+            artworkUrl: result.artworkUrl || null
         };
     }
 }

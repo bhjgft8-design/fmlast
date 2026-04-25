@@ -1,0 +1,159 @@
+import { AudioPlayer, createAudioPlayer, NoSubscriberBehavior, VoiceConnection } from '@discordjs/voice';
+import { TextChannel, Message } from 'discord.js';
+import { YoutubeResult } from '../api/Youtube';
+import { config } from '../../../config';
+
+export type RepeatMode = 'off' | 'one' | 'all';
+
+export interface GuildQueue {
+    textChannel: TextChannel;
+    voiceChannelId: string;
+    connection: VoiceConnection | null;
+    player: AudioPlayer | null;
+    tracks: YoutubeResult[];
+    currentTrack: YoutubeResult | null;
+    isPlaying: boolean;
+    isPaused: boolean;
+    repeatMode: RepeatMode;
+    repeatCount: number;
+    consecutiveErrors: number;
+    currentResource: any | null;
+    nowPlayingMessage?: Message;
+    progressInterval?: NodeJS.Timeout;
+    inactivityTimer?: NodeJS.Timeout;
+    mixContext?: {
+        songs: YoutubeResult[];
+        index: number;
+        title: string;
+    };
+}
+
+const queues = new Map<string, GuildQueue>();
+
+export class QueueManager {
+    static getQueue(guildId: string): GuildQueue | undefined {
+        return queues.get(guildId);
+    }
+
+    static createQueue(
+        guildId: string, 
+        textChannel: TextChannel, 
+        voiceChannelId: string, 
+        connection: VoiceConnection
+    ): GuildQueue {
+        const player = createAudioPlayer({
+            behaviors: {
+                noSubscriber: NoSubscriberBehavior.Play,
+            },
+        });
+
+        const queue: GuildQueue = {
+            textChannel,
+            voiceChannelId,
+            connection,
+            player,
+            tracks: [],
+            currentTrack: null,
+            isPlaying: false,
+            isPaused: false,
+            repeatMode: 'off',
+            repeatCount: 0,
+            consecutiveErrors: 0,
+            currentResource: null,
+        };
+
+        connection.subscribe(player);
+        queues.set(guildId, queue);
+        return queue;
+    }
+
+    static deleteQueue(guildId: string): void {
+        const queue = queues.get(guildId);
+        if (!queue) return;
+
+        if (queue.inactivityTimer) clearTimeout(queue.inactivityTimer);
+        if (queue.progressInterval) clearInterval(queue.progressInterval);
+        
+        queue.player?.stop(true);
+        try {
+            queue.connection?.destroy();
+        } catch {}
+
+        queues.delete(guildId);
+    }
+
+    static addTrack(guildId: string, track: YoutubeResult): number {
+        const queue = queues.get(guildId);
+        if (!queue) throw new Error(`No queue exists for guild ${guildId}`);
+
+        queue.tracks.push(track);
+        
+        if (!queue.currentTrack && queue.tracks.length === 1) {
+            return 0; // Means it should start playing immediately
+        }
+
+        return queue.tracks.length;
+    }
+
+    static getNextTrack(guildId: string): YoutubeResult | undefined {
+        const queue = queues.get(guildId);
+        if (!queue) return undefined;
+
+        // If we have a current track and repeat is on, return it before shifting new ones
+        if (queue.currentTrack) {
+            if (queue.repeatMode === 'one') {
+                queue.repeatCount++;
+                return queue.currentTrack;
+            } else if (queue.repeatMode === 'all') {
+                queue.tracks.push(queue.currentTrack);
+                // Continue to shift below
+            }
+        }
+
+        queue.repeatCount = 0;
+        const next = queue.tracks.shift();
+        
+        // If we didn't find a next track but 'all' is on, we might have just pushed it back
+        // but if tracks was empty, it won't matter.
+        return next;
+    }
+
+    static getNextMixTrack(guildId: string): YoutubeResult | undefined {
+        const queue = queues.get(guildId);
+        if (!queue?.mixContext) return undefined;
+
+        const { songs, index } = queue.mixContext;
+        if (index >= songs.length) {
+            queue.mixContext = undefined;
+            return undefined;
+        }
+
+        const track = songs[index];
+        queue.mixContext.index = index + 1;
+        return track;
+    }
+
+    static setRepeatMode(guildId: string, mode: RepeatMode): void {
+        const queue = queues.get(guildId);
+        if (queue) {
+            queue.repeatMode = mode;
+        }
+    }
+
+    static setMixContext(guildId: string, songs: YoutubeResult[], title: string): void {
+        const queue = queues.get(guildId);
+        if (!queue) return;
+        queue.mixContext = { songs, index: 0, title };
+    }
+
+    static clearQueue(guildId: string): void {
+        const queue = queues.get(guildId);
+        if (!queue) return;
+
+        queue.tracks = [];
+        queue.currentTrack = null;
+        queue.isPlaying = false;
+        queue.isPaused = false;
+        queue.mixContext = undefined;
+    }
+}
