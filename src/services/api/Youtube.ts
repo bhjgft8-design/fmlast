@@ -199,71 +199,42 @@ function getPlayerClients(attempt = 1): string {
 }
 
 function getAuthFlags(attempt = 1): string[] {
-    ensureCookiesFile(); // Guarantee file exists before any flags are generated
-
-    const youtubeArgs: string[] = [`player_client=${getPlayerClients(attempt)}`];
-
-    // Use dynamic visitorData if we have it, otherwise fallback to env
-    const vData = currentVisitorData || config.YT_VISITOR_DATA;
-    if (vData) {
-        youtubeArgs.push(`visitor_data=${vData}`);
-    }
+    ensureCookiesFile();
 
     const clients = getPlayerClients(attempt);
+    const youtubeArgs: string[] = [`player_client=${clients}`];
     const isWebClient = clients.includes('web') || clients.includes('default');
-    
-    // Only skip webpage for non-web clients. 
-    // Web clients (Attempt 1) NEED the webpage for PO Token generation.
+
     if (!isWebClient) {
         youtubeArgs.push('player_skip=webpage,configs');
     }
 
-    const flags: string[] = [
-        '--extractor-args', `youtube:${youtubeArgs.join(';')}`,
-        '--cookies', COOKIES_FILE
-    ];
+    // ATTEMPT 1: PO Token Route (Unauthenticated, uses visitorData)
+    if (attempt === 1 && config.POTOKEN_SERVER) {
+        const vData = currentVisitorData || config.YT_VISITOR_DATA;
+        if (vData) youtubeArgs.push(`visitor_data=${vData}`);
 
-    if (config.POTOKEN_SERVER) {
+        const flags: string[] = [
+            '--extractor-args', `youtube:${youtubeArgs.join(';')}`
+        ];
+
         let baseUrl = config.POTOKEN_SERVER.replace(/\/$/, '');
-        
-        // Defensive: ensure scheme is present
-        if (!baseUrl.startsWith('http')) {
-            baseUrl = `https://${baseUrl}`;
-        }
-
+        if (!baseUrl.startsWith('http')) baseUrl = `https://${baseUrl}`;
         flags.push('--extractor-args', `youtubepot-bgutilhttp:base_url=${baseUrl}`);
-        
-        // Final fallback: If Attempt 3 is reached, it's a very difficult video.
-        // Try to DISABLE the POT provider and just use cookies + mobile client.
-        if (attempt === 3) {
-            console.log(`[Youtube] ⚠️ Final attempt: Trying WITHOUT PO Token provider for stability`);
-            return [
-                '--extractor-args', 'youtube:player_client=ios,android;player_skip=webpage,configs',
-                '--cookies', COOKIES_FILE,
-                '--no-check-certificates'
-            ];
-        }
 
-        // Background check for token server reachability (hit /ping)
-        if (attempt === 1) {
-            const checkUrl = `${baseUrl}/ping`;
-            fetch(checkUrl)
-                .then(r => { 
-                    if (r.status !== 200) {
-                        console.warn(`[Youtube] ⚠️ PO Token server (${checkUrl}) returned status ${r.status}`); 
-                    } else {
-                        // console.log(`[Youtube] ✓ PO Token server is healthy`);
-                    }
-                })
-                .catch(e => console.warn(`[Youtube] ⚠️ PO Token server (${checkUrl}) UNREACHABLE: ${e.message}`));
-        }
+        fetch(`${baseUrl}/ping`).catch(() => {});
+
+        return flags;
     }
 
-    if (existsSync(COOKIES_FILE)) {
-        flags.push('--cookies', COOKIES_FILE);
-    }
-
-    return flags;
+    // ATTEMPT 2 & 3: Mobile/Cookie Route (Authenticated, NO visitorData, NO PO Token Provider)
+    // We add --use-extractors "youtube" to BYPASS the failing youtube+GetPOT plugin
+    return [
+        '--extractor-args', `youtube:${youtubeArgs.join(';')}`,
+        '--use-extractors', 'youtube',
+        '--cookies', COOKIES_FILE,
+        '--no-check-certificates'
+    ];
 }
 
 export class Youtube {
