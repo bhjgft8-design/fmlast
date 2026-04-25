@@ -39,33 +39,6 @@ export class MusicPlayer {
 
         return queue;
     }
-
-    private static setupPlayerEvents(guildId: string) {
-        const queue = QueueManager.getQueue(guildId);
-        if (!queue || !queue.player) return;
-
-        queue.player.on('start', () => {
-            console.log(`[Lavalink] Playback started in guild ${guildId}`);
-            queue.isPlaying = true;
-            queue.isPaused = false;
-            this.startProgressUpdate(guildId);
-        });
-
-        queue.player.on('end', (data: TrackEndEvent) => {
-            if (data.reason === 'replaced') return;
-            console.log(`[Lavalink] Track ended in guild ${guildId}`);
-            queue.isPlaying = false;
-            this.processQueue(guildId).catch(err => console.error(`[MusicPlayer] Auto-play failed:`, err));
-        });
-
-        queue.player.on('exception', (data: TrackExceptionEvent) => {
-            console.error(`[Lavalink] Player Exception in guild ${guildId}:`, data.exception.message);
-            queue.textChannel.send(`⚠️ Error playing **${queue.currentTrack?.title}**: ${data.exception.message}`);
-            queue.isPlaying = false;
-            this.processQueue(guildId, 1).catch(() => { });
-        });
-    }
-
     /**
      * Start playing or add to queue
      */
@@ -181,11 +154,15 @@ export class MusicPlayer {
             const result = await node.rest.resolve(track.url);
 
             if (!result || !result.data || result.loadType === 'error' || result.loadType === 'empty') {
-                throw new Error('Lavalink could not resolve this track.');
+                console.warn(`[MusicPlayer] ⚠️ Failed to resolve ${track.url} (LoadType: ${result?.loadType})`);
+                return this.processQueue(guildId, _skipCount + 1);
             }
 
-            const lavalinkTrack = Array.isArray(result.data) ? result.data[0] : result.data;
+            const lavalinkTrack = result.data;
             
+            // PRESERVE ORIGINAL METADATA: 
+            // We use the track object passed from the command (Spotify/UTR) 
+            // instead of the resolved YouTube metadata for the UI.
             queue.currentTrack = track;
             
             if (!queue.player) throw new Error('Player not initialized');
@@ -196,14 +173,10 @@ export class MusicPlayer {
             // Render UI
             await this.sendPlaybackUI(guildId, track);
 
-            // Start progress updates
-            this.startProgressUpdate(guildId);
-
             // Scrobble
             if (track.artistName && track.trackTitle) {
                 this.handleScrobbling(guildId, track);
             }
-
         } catch (err: any) {
             console.error(`[MusicPlayer] Critical Playback Error:`, err);
             queue.textChannel.send(`❌ **Playback Failed**: ${err.message || 'Unknown error'}. Skipping...`);
@@ -211,6 +184,41 @@ export class MusicPlayer {
             queue.isPlaying = false;
             this.processQueue(guildId, _skipCount + 1).catch(() => { });
         }
+    }
+
+    private static setupPlayerEvents(guildId: string): void {
+        const queue = QueueManager.getQueue(guildId);
+        if (!queue || !queue.player) return;
+
+        // Clear existing listeners to prevent multiple triggers skipping tracks
+        queue.player.removeAllListeners();
+
+        queue.player.on('start', () => {
+            console.log(`[Lavalink] Playback started in guild ${guildId}`);
+            queue.isPlaying = true;
+            queue.isPaused = false;
+            this.startProgressUpdate(guildId);
+            this.updateNowPlayingMessage(guildId);
+        });
+
+        queue.player.on('end', (data) => {
+            console.log(`[Lavalink] Track ended in guild ${guildId}. Reason: ${data.reason}`);
+            
+            if (data.reason === 'replaced') return;
+            
+            queue.isPlaying = false;
+            this.stopProgressUpdate(guildId);
+
+            this.processQueue(guildId).catch(err => {
+                console.error(`[MusicPlayer] Error in processQueue after track end:`, err);
+            });
+        });
+
+        queue.player.on('exception', (data) => {
+            console.error(`[Lavalink] Playback exception in guild ${guildId}:`, data.exception);
+            queue.isPlaying = false;
+            this.processQueue(guildId, 1).catch(() => {});
+        });
     }
 
     private static async sendPlaybackUI(guildId: string, track: YoutubeResult) {
@@ -318,7 +326,6 @@ export class MusicPlayer {
                     const res = await ScrobbleService.scrobbleForUsers(listeners, { artist: art, track: tit });
                     const successCount = res.filter(r => r.status === 'fulfilled').length;
                     (track as any).scrobbleCount = successCount;
-                    this.updateNowPlayingMessage(guildId);
                     this.updateNowPlayingMessage(guildId);
                 }
             }

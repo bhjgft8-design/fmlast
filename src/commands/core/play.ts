@@ -187,6 +187,12 @@ export default class PlayCommand extends BaseCommand {
         const result = await Youtube.search(query);
         if (!result) return null;
 
+        // Force original metadata if we have it (prevents YouTube covers from overwriting)
+        if (artist && name) {
+            result.artistName = artist;
+            result.trackTitle = name;
+        }
+
         // Enrich track with metadata
         await MetadataService.enrich(result, member, dbUser);
 

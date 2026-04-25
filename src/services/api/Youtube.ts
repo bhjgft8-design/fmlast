@@ -36,8 +36,9 @@ export class Youtube {
     /**
      * General YouTube search.
      */
-    static async search(query: string): Promise<YoutubeResult | null> {
-        const results = await this.searchByQuery(query);
+    static async search(query: string, isMusic = true): Promise<YoutubeResult | null> {
+        const searchQuery = isMusic ? `${query} (Official Audio)` : query;
+        const results = await this.searchByQuery(searchQuery);
         return results[0] ?? null;
     }
 
