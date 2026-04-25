@@ -203,12 +203,6 @@ function getAuthFlags(attempt = 1): string[] {
 
     const youtubeArgs: string[] = [`player_client=${getPlayerClients(attempt)}`];
 
-    // Use dynamic visitorData if we have it, otherwise fallback to env
-    const vData = currentVisitorData || config.YT_VISITOR_DATA;
-    if (vData) {
-        youtubeArgs.push(`visitor_data=${vData}`);
-    }
-
     const clients = getPlayerClients(attempt);
     const isWebClient = clients.includes('web') || clients.includes('default');
     
@@ -218,7 +212,10 @@ function getAuthFlags(attempt = 1): string[] {
         youtubeArgs.push('player_skip=webpage,configs');
     }
 
-    const flags: string[] = ['--extractor-args', `youtube:${youtubeArgs.join(';')}`];
+    const flags: string[] = [
+        '--extractor-args', `youtube:${youtubeArgs.join(';')}`,
+        '--cookies', COOKIES_FILE
+    ];
 
     if (config.POTOKEN_SERVER) {
         let baseUrl = config.POTOKEN_SERVER.replace(/\/$/, '');
