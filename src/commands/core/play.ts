@@ -83,10 +83,25 @@ export default class PlayCommand extends BaseCommand {
                     }
                 }
             } else if (!query.startsWith('http')) {
-                // Raw query search
-                const meta = await Spotify.searchRaw(query);
-                if (meta) tracksToProcess.push(meta);
-                else tracksToProcess.push({ name: query, artist: '' }); // Fallback to raw query if searchRaw fails
+                // Raw query search - check for 'by' keyword
+                let trackPart = query;
+                let artistPart = '';
+
+                if (query.includes(' by ')) {
+                    const parts = query.split(' by ');
+                    trackPart = parts[0].trim();
+                    artistPart = parts[1].trim();
+                    
+                    // Handle common abbreviations
+                    if (artistPart.toLowerCase() === 'cas') artistPart = 'Cigarettes After Sex';
+                }
+
+                const meta = await Spotify.searchRaw(artistPart ? `${trackPart} ${artistPart}` : query);
+                if (meta) {
+                    tracksToProcess.push(meta);
+                } else {
+                    tracksToProcess.push({ name: trackPart, artist: artistPart });
+                }
             } else {
                 // YouTube link or similar (handled by Youtube.search directly)
                 tracksToProcess.push({ name: query, artist: '' });
