@@ -41,6 +41,7 @@ const CACHE_TTL_MS = 60 * 60 * 1000;
 const MAX_CACHE_SIZE = 500;
 const metadataCache = new Map<string, CacheEntry>();
 let currentVisitorData: string | null = process.env.YT_VISITOR_DATA || null;
+let initialVisitorDataRefreshed = false;
 
 // ffmpeg/yt-dlp settings from MusicBox-prod
 const FFMPEG_PROBE_SIZE_COPY = 262_144;
@@ -145,9 +146,9 @@ try {
         let baseUrl = config.POTOKEN_SERVER.replace(/\/$/, '');
         if (!baseUrl.startsWith('http')) baseUrl = `https://${baseUrl}`;
         
-        console.log(`[Youtube] 💓 Starting Keep-Alive heartbeat for: ${baseUrl}`);
+        console.log(`[Youtube] 💓 Starting Keep-Alive heartbeat for: ${baseUrl}/ping`);
         setInterval(() => {
-            fetch(baseUrl).catch(() => {});
+            fetch(`${baseUrl}/ping`).catch(() => {});
         }, 10 * 60 * 1000); // Every 10 minutes
     }
 } catch (err) {
@@ -186,9 +187,9 @@ const CLIENT_ROTATION: readonly string[] = [
 ];
 
 const POTOKEN_CLIENT_ROTATION: readonly string[] = [
-    'default,web_safari',    // Attempt 1 — Optimized for PO Tokens + visitorData
+    'web,default',           // Attempt 1 — Optimized for PO Tokens
     'ios,android,tv_simply', // Attempt 2 — Mobile fallback
-    'tv_simply,ios,android', // Attempt 3 — TV fallback
+    'tv_simply,web,android', // Attempt 3 — TV fallback
 ];
 
 function getPlayerClients(attempt = 1): string {
@@ -229,15 +230,30 @@ function getAuthFlags(attempt = 1): string[] {
 
         flags.push('--extractor-args', `youtubepot-bgutilhttp:base_url=${baseUrl}`);
         
-        // Background check for token server reachability (hit the root)
+        // Final fallback: If Attempt 3 is reached, it's a very difficult video.
+        // Try to DISABLE the POT provider and just use cookies + mobile client.
+        if (attempt === 3) {
+            console.log(`[Youtube] ⚠️ Final attempt: Trying WITHOUT PO Token provider for stability`);
+            return [
+                '--extractor-args', 'youtube:player_client=ios,android',
+                '--cookies', COOKIES_FILE,
+                '--js-runtimes', 'node',
+                '--no-check-certificates'
+            ];
+        }
+
+        // Background check for token server reachability (hit /ping)
         if (attempt === 1) {
-            fetch(baseUrl)
+            const checkUrl = `${baseUrl}/ping`;
+            fetch(checkUrl)
                 .then(r => { 
-                    if (r.status !== 200 && r.status !== 405) {
-                        console.warn(`[Youtube] ⚠️ PO Token server (${baseUrl}) returned status ${r.status}`); 
+                    if (r.status !== 200) {
+                        console.warn(`[Youtube] ⚠️ PO Token server (${checkUrl}) returned status ${r.status}`); 
+                    } else {
+                        // console.log(`[Youtube] ✓ PO Token server is healthy`);
                     }
                 })
-                .catch(e => console.warn(`[Youtube] ⚠️ PO Token server (${baseUrl}) UNREACHABLE: ${e.message}`));
+                .catch(e => console.warn(`[Youtube] ⚠️ PO Token server (${checkUrl}) UNREACHABLE: ${e.message}`));
         }
     }
 
@@ -515,8 +531,9 @@ export class Youtube {
             // Attempt 2 & 3: Reliable transcode fallbacks.
             const mode: StreamMode = attempt === 1 ? 'copy' : 'transcode';
             try {
-                // If we don't have visitorData yet, try to get it before the first attempt
-                if (attempt === 1 && !currentVisitorData) {
+                // Ensure we have fresh visitorData for the first playback of the session
+                if (attempt === 1 && !initialVisitorDataRefreshed) {
+                    initialVisitorDataRefreshed = true;
                     await Youtube.refreshVisitorData().catch(() => {});
                 }
 
@@ -584,7 +601,7 @@ export class Youtube {
         const formatSelector =
             mode === 'copy'
                 ? 'bestaudio[acodec=opus][asr=48000]/251/250'
-                : 'bestaudio[acodec=opus][asr=48000]/bestaudio[abr>=96]/bestaudio[ext=m4a]/bestaudio';
+                : 'bestaudio[acodec=opus][asr=48000]/bestaudio[abr>=96]/bestaudio[ext=m4a]/ba/b';
 
         const ytdlpArgs = [
             url,
@@ -600,6 +617,7 @@ export class Youtube {
             '-R', '3',
             '--socket-timeout', '15',
             '--extractor-retries', '3',
+            '--js-runtimes', 'node',
             ...cookieFlags,
         ];
 
