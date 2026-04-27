@@ -90,8 +90,23 @@ export class TrackResolverService {
             
             const titleMatch = rT.includes(qTrack) || qTrack.includes(rT) || 
                                rT.startsWith(qTrack.substring(0, 4)); // prefix match for short titles
-            const artistMatch = !qArtist || rA.includes(qArtist) || qArtist.includes(rA) ||
-                                rA.replace(/theofficial|music|official/g, '').includes(qArtist);
+            
+            // Stricter artist match: 
+            // 1. One must contain the other
+            // 2. The length difference shouldn't be extreme (e.g. "Savage" vs "Niky Savage")
+            //    unless the result is a common "Topic" or "Official" channel
+            let artistMatch = !qArtist || rA.includes(qArtist) || qArtist.includes(rA);
+            
+            if (artistMatch && qArtist.length > 3) {
+                const lenDiff = Math.abs(rA.length - qArtist.length);
+                // If the difference is more than 60% of the longer string, it's likely a different artist
+                // (e.g. "savage" [6] vs "nikysavage" [10] -> diff 4. 4/10 = 0.4. Allowed.
+                // wait, "savage" [6] vs "21savage" [8] -> diff 2. Allowed.
+                // But "savage" [6] vs "savage garden" [12] -> diff 6. 6/12 = 0.5.
+                if (lenDiff > Math.max(rA.length, qArtist.length) * 0.6 && !rA.includes('topic')) {
+                    artistMatch = false;
+                }
+            }
             
             return titleMatch && artistMatch;
         };
@@ -227,15 +242,56 @@ export class TrackResolverService {
         return result;
     }
 
+    private static isValidMatch(resTitle: string, resArtist: string, qTrack: string, qArtist: string): boolean {
+        const clean = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const rT = clean(resTitle);
+        const rA = clean(resArtist);
+        const qt = clean(qTrack);
+        const qa = clean(qArtist);
+
+        if (!rT) return false;
+
+        const titleMatch = rT.includes(qt) || qt.includes(rT) || rT.startsWith(qt.substring(0, 4));
+        let artistMatch = !qa || rA.includes(qa) || qa.includes(rA);
+
+        if (artistMatch && qa.length > 3) {
+            const lenDiff = Math.abs(rA.length - qa.length);
+            if (lenDiff > Math.max(rA.length, qa.length) * 0.6 && !rA.includes('topic')) {
+                artistMatch = false;
+            }
+        }
+
+        return titleMatch && artistMatch;
+    }
+
     /**
-     * Helper to resolve YouTube link separately if requested
+     * Helper to resolve YouTube link separately if requested.
+     * Uses strict similarity validation to prevent false positives for common artist names.
      */
     static async getYoutubeLink(artist: string, track: string): Promise<string | null> {
         const { Youtube } = await import('./Youtube');
-        // Clean characters that break YouTube search (like !? in MABSOTA!?)
-        const cleanQuery = `${artist} - ${track}`.replace(/[!?]/g, '');
-        const res = await Youtube.search(cleanQuery);
-        return res?.url || null;
+        
+        // Clean characters that break YouTube search
+        const cleanQuery = `${artist} - ${track}`.replace(/[!?]/g, '').trim();
+        const results = await Youtube.searchByQuery(`${cleanQuery} (Official Audio)`);
+        
+        if (!results || results.length === 0) return null;
+
+        // Find the best match among top 3 results using shared validation
+        for (const res of results.slice(0, 3)) {
+            if (this.isValidMatch(res.title, res.channelTitle, track, artist)) {
+                return res.url;
+            }
+        }
+
+        // Final fallback for exact match in title
+        const first = results[0];
+        const clean = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        if (clean(first.title).includes(clean(artist)) && clean(first.title).includes(clean(track))) {
+            return first.url;
+        }
+
+        return null;
     }
 
     /**

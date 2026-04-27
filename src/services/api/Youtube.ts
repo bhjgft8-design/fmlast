@@ -44,51 +44,51 @@ export class Youtube {
     }
 
     public static async searchByQuery(query: string): Promise<YoutubeResult[]> {
-        // Primary search using Lavalink for speed and reliability
-        try {
-            const node = shoukaku.options.nodeResolver(shoukaku.nodes);
-            if (!node) throw new Error('No nodes available');
-
-            const res = await node.rest.resolve(`ytsearch:${query}`);
-            
-            if (!res || !res.data || res.loadType === 'error' || res.loadType === 'empty') {
-                throw new Error('Lavalink search failed');
-            }
-
-            const tracks = Array.isArray(res.data) ? res.data : [res.data];
-            
-            return tracks.map((track: any) => ({
-                title: track.info.title,
-                url: track.info.uri,
-                id: track.info.identifier,
-                thumbnail: `https://img.youtube.com/vi/${track.info.identifier}/hqdefault.jpg`,
-                channelTitle: track.info.author,
-                duration: this.formatDuration(track.info.length / 1000),
-                durationSeconds: Math.floor(track.info.length / 1000),
-            }));
-        } catch (error) {
-            const message = error instanceof Error ? error.message : String(error);
-            console.warn(`[Youtube] Lavalink search failed, trying youtube-sr fallback: ${message}`);
-
+        const nodes = Array.from(shoukaku.nodes.values());
+        
+        for (const node of nodes) {
             try {
-                const results = await YouTubeSR.search(query, {
-                    limit: 5,
-                    type: 'video',
-                });
+                if (!node || node.state !== 1) continue; // 1 = CONNECTED
 
-                return results.map((video) => ({
-                    title: video.title ?? 'Unknown Title',
-                    url: video.url,
-                    id: video.id ?? '',
-                    thumbnail: video.thumbnail?.url ?? '',
-                    channelTitle: video.channel?.name ?? 'Unknown Channel',
-                    duration: video.durationFormatted,
-                    durationSeconds: Math.floor((video.duration ?? 0) / 1000),
+                const res = await node.rest.resolve(`ytsearch:${query}`);
+                if (!res || !res.data || res.loadType === 'error' || res.loadType === 'empty') continue;
+
+                const tracks = Array.isArray(res.data) ? res.data : [res.data];
+                return tracks.map((track: any) => ({
+                    title: track.info.title,
+                    url: track.info.uri,
+                    id: track.info.identifier,
+                    thumbnail: `https://img.youtube.com/vi/${track.info.identifier}/hqdefault.jpg`,
+                    channelTitle: track.info.author,
+                    duration: this.formatDuration(track.info.length / 1000),
+                    durationSeconds: Math.floor(track.info.length / 1000),
                 }));
-            } catch (srError) {
-                console.error(`[Youtube] All search methods failed:`, srError);
-                return [];
+            } catch (error) {
+                console.warn(`[Youtube] Search failed on node ${node.name}: ${error instanceof Error ? error.message : String(error)}`);
             }
+        }
+
+        // Final fallback to youtube-sr with extra safety
+        try {
+            const results = await YouTubeSR.search(query, {
+                limit: 5,
+                type: 'video',
+            });
+
+            if (!results || !Array.isArray(results)) return [];
+
+            return results.map((video) => ({
+                title: video.title ?? 'Unknown Title',
+                url: video.url,
+                id: video.id ?? '',
+                thumbnail: video.thumbnail?.url ?? '',
+                channelTitle: video.channel?.name ?? 'Unknown Channel',
+                duration: video.durationFormatted,
+                durationSeconds: Math.floor((video.duration ?? 0) / 1000),
+            }));
+        } catch (srError) {
+            console.error(`[Youtube] All search methods failed (including youtube-sr crash):`, srError);
+            return [];
         }
     }
 

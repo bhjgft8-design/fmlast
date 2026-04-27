@@ -10,7 +10,10 @@ import { VoiceStatusService } from './VoiceStatusService';
 import VoteSkipCommand from '../../commands/music/voteskip';
 import { MusicUIController } from './MusicUIController';
 
-const playLocks = new Map<string, Promise<void>>();
+/**
+ * Global mutex for each guild to ensure only one playback process runs at a time.
+ */
+const playbackMutex = new Map<string, boolean>();
 
 const ARTIST_OVERRIDES: Record<string, { cluster: string, related?: string[] }> = {
     'zaf': {
@@ -71,15 +74,10 @@ export class MusicPlayer {
             QueueManager.addTrack(guildId, track);
         }
 
-        const prev = playLocks.get(guildId) ?? Promise.resolve();
-        const next = prev.then(() => this.processQueue(guildId));
-        const stored = next.catch(() => { });
-        stored.finally(() => {
-            if (playLocks.get(guildId) === stored) {
-                playLocks.delete(guildId);
-            }
+        // Kickstart the queue process
+        this.processQueue(guildId).catch(err => {
+            console.error(`[MusicPlayer] play() processQueue error:`, err);
         });
-        playLocks.set(guildId, stored);
 
         return queue.tracks.length;
     }
@@ -101,6 +99,7 @@ export class MusicPlayer {
             VoiceStatusService.updatePresence(client, null);
         }
         QueueManager.deleteQueue(guildId);
+        playbackMutex.delete(guildId);
         return true;
     }
 
@@ -217,23 +216,22 @@ export class MusicPlayer {
 
         try {
             console.log(`[MusicPlayer] 🤖 Last.fm Autoplay triggered for guild ${guildId}`);
-            
             const currentArtist = queue.currentTrack.artistName || '';
             const currentTitle = queue.currentTrack.trackTitle || queue.currentTrack.title;
-            
             if (!currentArtist) return null;
 
+            // Notify user
             queue.textChannel.send('🎵 **Autoplay**: Finding similar tracks...').then(m => setTimeout(() => m.delete().catch(() => {}), 5000));
 
             const { LastFM } = await import('../api/LastFM');
-            let similar: any[] = [];
+            const { TrackResolverService } = await import('../api/TrackResolverService');
+            const { MetadataService } = await import('../bot/MetadataService');
 
+            let similar: any[] = [];
             const manualOverride = ARTIST_OVERRIDES[currentArtist.toLowerCase()];
+            
             if (manualOverride?.related) {
-                const randomRelated = manualOverride.related
-                    .sort(() => Math.random() - 0.5)
-                    .slice(0, 5);
-                
+                const randomRelated = manualOverride.related.sort(() => Math.random() - 0.5).slice(0, 5);
                 for (const relatedArtist of randomRelated) {
                     try {
                         const top = await LastFM.getArtistTopTracks(relatedArtist, 3);
@@ -243,53 +241,64 @@ export class MusicPlayer {
             }
 
             if (similar.length === 0) {
-                similar = await LastFM.getSimilarTracks(currentArtist, currentTitle, 15);
+                similar = await LastFM.getSimilarTracks(currentArtist, currentTitle, 20);
             }
-            
             if (!similar || similar.length === 0) {
-                similar = await LastFM.getArtistTopTracks(currentArtist, 15);
+                similar = await LastFM.getArtistTopTracks(currentArtist, 20);
             }
 
             if (similar && similar.length > 0) {
-                // Filter tracks that are already in the queue or just played
-                const recentlyPlayed = queue.tracks.slice(-20).map(t => (t.trackTitle || t.title).toLowerCase());
-                
-                const filtered = similar.filter((t: any) => {
+                // Deduplicate
+                const seen = new Set<string>();
+                const uniqueSimilar = similar.filter(t => {
+                    const key = `${t.artist?.name || t.artist?.['#text']}-${t.name}`.toLowerCase();
+                    if (seen.has(key)) return false;
+                    seen.add(key);
+                    return true;
+                }).sort(() => Math.random() - 0.5);
+
+                const recentlyPlayed = [currentTitle.toLowerCase()];
+                const filtered = uniqueSimilar.filter((t: any) => {
                     const tName = t.name.toLowerCase();
-                    return !recentlyPlayed.includes(tName) && tName !== currentTitle.toLowerCase();
+                    return !recentlyPlayed.includes(tName);
                 });
 
-                const related = filtered.slice(0, 3);
-                if (related.length === 0 && similar.length > 0) {
-                    related.push(similar[0]);
-                }
+                const candidates = filtered.slice(0, 15);
+                let firstTrack: YoutubeResult | null = null;
+                
+                console.log(`[MusicPlayer] 🤖 Checking ${candidates.length} candidates for autoplay...`);
 
-                const { TrackResolverService } = await import('../api/TrackResolverService');
-                const { MetadataService } = await import('../bot/MetadataService');
-
-                for (const t of related) {
+                for (const t of candidates) {
                     const artist = t.artist?.name || t.artist?.['#text'] || currentArtist;
-                    const resolved = await TrackResolverService.resolve(artist, t.name);
-                    
-                    const ytUrl = resolved.links.youtube;
-                    if (!ytUrl) continue;
+                    try {
+                        const resolved = await TrackResolverService.resolve(artist, t.name);
+                        if (!resolved.links.youtube) continue;
 
-                    const trackObj: YoutubeResult = {
-                        id: t.mbid || String(Math.random()),
-                        title: `${artist} - ${t.name}`,
-                        url: ytUrl,
-                        thumbnail: resolved.artworkUrl || '',
-                        channelTitle: artist,
-                        artistName: artist,
-                        trackTitle: t.name,
-                        requesterName: 'Autoplay'
-                    };
+                        const trackObj: YoutubeResult = {
+                            id: t.mbid || String(Math.random()),
+                            title: `${artist} - ${t.name}`,
+                            url: resolved.links.youtube,
+                            thumbnail: resolved.artworkUrl || '',
+                            channelTitle: artist,
+                            artistName: artist,
+                            trackTitle: t.name,
+                            requesterName: 'Autoplay'
+                        };
 
-                    await MetadataService.enrich(trackObj, null, null);
-                    QueueManager.addTrack(guildId, trackObj);
+                        await MetadataService.enrich(trackObj, null, null);
+                        
+                        if (!firstTrack) {
+                            firstTrack = trackObj;
+                            console.log(`[MusicPlayer] 🤖 Autoplay match found: ${trackObj.title}. Starting playback.`);
+                            
+                            // Background resolve 2 more tracks
+                            this.backgroundAutoplayResolve(guildId, candidates.slice(candidates.indexOf(t) + 1));
+                            break; 
+                        }
+                    } catch { continue; }
                 }
 
-                return QueueManager.getNextTrack(guildId);
+                return firstTrack;
             }
         } catch (err) {
             console.error('[MusicPlayer] Last.fm Autoplay failed:', err);
@@ -297,89 +306,144 @@ export class MusicPlayer {
         return null;
     }
 
+    private static async backgroundAutoplayResolve(guildId: string, candidates: any[]) {
+        const { TrackResolverService } = await import('../api/TrackResolverService');
+        const { MetadataService } = await import('../bot/MetadataService');
+        
+        let addedCount = 0;
+        for (const t of candidates) {
+            const artist = t.artist?.name || t.artist?.['#text'];
+            if (!artist) continue;
+            try {
+                const resolved = await TrackResolverService.resolve(artist, t.name);
+                if (!resolved.links.youtube) continue;
+
+                const trackObj: YoutubeResult = {
+                    id: t.mbid || String(Math.random()),
+                    title: `${artist} - ${t.name}`,
+                    url: resolved.links.youtube,
+                    thumbnail: resolved.artworkUrl || '',
+                    channelTitle: artist,
+                    artistName: artist,
+                    trackTitle: t.name,
+                    requesterName: 'Autoplay'
+                };
+
+                await MetadataService.enrich(trackObj, null, null);
+                QueueManager.addTrack(guildId, trackObj);
+                addedCount++;
+                if (addedCount >= 2) break;
+            } catch { continue; }
+        }
+        console.log(`[MusicPlayer] 🤖 Background autoplay resolve finished. Added ${addedCount} tracks.`);
+    }
+
     private static async processQueue(guildId: string, _skipCount = 0): Promise<void> {
         const queue = QueueManager.getQueue(guildId);
         if (!queue) return;
 
-        if (_skipCount > 10) {
-            console.warn(`[MusicPlayer] Too many consecutive failures for guild ${guildId}, stopping`);
-            this.stop(guildId);
+        if (playbackMutex.get(guildId)) {
+            console.log(`[MusicPlayer] ⏳ processQueue already running for guild ${guildId}, skipping.`);
             return;
         }
-
-        if (queue.isPlaying && queue.currentTrack) return; 
-
-        this.stopProgressUpdate(guildId);
-
-        let track = QueueManager.getNextTrack(guildId) || QueueManager.getNextMixTrack(guildId);
-
-        if (!track) {
-            track = await this.handleAutoplay(guildId, queue);
-        }
-
-        if (!track) {
-            queue.currentTrack = null;
-            queue.isPlaying = false;
-
-            queue.textChannel.send('✅ **Queue concluded.** Disconnecting in 5 minutes if inactive.').catch(() => { });
-
-            if (queue.inactivityTimer) clearTimeout(queue.inactivityTimer);
-            queue.inactivityTimer = setTimeout(() => {
-                const refreshed = QueueManager.getQueue(guildId);
-                if (refreshed && !refreshed.isPlaying && refreshed.tracks.length === 0) {
-                    this.stop(guildId);
-                }
-            }, config.INACTIVITY_TIMEOUT * 1000);
-            return;
-        }
-
-        if (queue.inactivityTimer) {
-            clearTimeout(queue.inactivityTimer);
-            queue.inactivityTimer = undefined;
-        }
+        playbackMutex.set(guildId, true);
 
         try {
+            if (_skipCount > 5) {
+                console.warn(`[MusicPlayer] 🛑 Too many consecutive failures for guild ${guildId}, stopping.`);
+                this.stop(guildId);
+                return;
+            }
+
+            if (queue.isPlaying) {
+                console.log(`[MusicPlayer] ⏩ Already playing in guild ${guildId}, skipping processQueue.`);
+                playbackMutex.delete(guildId);
+                return;
+            }
+
+            this.stopProgressUpdate(guildId);
+
+            let track = QueueManager.getNextTrack(guildId) || QueueManager.getNextMixTrack(guildId);
+
+            if (!track) {
+                console.log(`[MusicPlayer] 🤖 Queue empty, triggering autoplay for guild ${guildId}...`);
+                track = await this.handleAutoplay(guildId, queue);
+            }
+
+            if (!track) {
+                console.log(`[MusicPlayer] 🏁 Queue concluded for guild ${guildId}.`);
+                queue.currentTrack = null;
+                queue.isPlaying = false;
+                queue.textChannel.send('✅ **Queue concluded.** Disconnecting in 5 minutes if inactive.').catch(() => { });
+
+                if (queue.inactivityTimer) clearTimeout(queue.inactivityTimer);
+                queue.inactivityTimer = setTimeout(() => {
+                    const refreshed = QueueManager.getQueue(guildId);
+                    if (refreshed && !refreshed.isPlaying && refreshed.tracks.length === 0) {
+                        this.stop(guildId);
+                    }
+                }, config.INACTIVITY_TIMEOUT * 1000);
+                return;
+            }
+
+            if (queue.inactivityTimer) {
+                clearTimeout(queue.inactivityTimer);
+                queue.inactivityTimer = undefined;
+            }
+
+            console.log(`[MusicPlayer] 🎵 Preparing to play: ${track.title}`);
             const { LyricsService } = await import('./LyricsService');
             LyricsService.cleanupForGuild(guildId);
 
-            console.log(`[MusicPlayer] 🎵 Resolving track for: ${track.title}`);
-
             if (!queue.player) throw new Error('Player not initialized');
-            const node = queue.player.node;
             
-            let result = await node.rest.resolve(track.url);
-            if (!result || !result.data || result.loadType === 'empty' || result.loadType === 'error') {
-                result = await node.rest.resolve(`ytsearch:${track.title}`);
+            const nodes = Array.from(shoukaku.nodes.values());
+            let lavalinkTrack = null;
+
+            for (const node of nodes) {
+                if (node.state !== 1) continue;
+                try {
+                    console.log(`[MusicPlayer] 🔍 Resolving on node ${node.name}: ${track.url || track.title}`);
+                    let res = await node.rest.resolve(track.url);
+                    if (!res || !res.data || res.loadType === 'empty' || res.loadType === 'error') {
+                        res = await node.rest.resolve(`ytsearch:${track.title}`);
+                    }
+                    if (res && res.data && res.loadType !== 'empty' && res.loadType !== 'error') {
+                        lavalinkTrack = Array.isArray(res.data) ? res.data[0] : res.data;
+                        break;
+                    }
+                } catch (e: any) { 
+                    console.warn(`[MusicPlayer] ⚠️ Node ${node.name} resolution failed: ${e.message}`);
+                    continue; 
+                }
             }
 
-            if (!result || !result.data || result.loadType === 'error' || result.loadType === 'empty') {
-                console.warn(`[MusicPlayer] ⚠️ Failed to resolve ${track.title}`);
-                return this.processQueue(guildId, _skipCount + 1);
-            }
-
-            const lavalinkTrack = Array.isArray(result.data) ? result.data[0] : result.data;
-            
             if (!lavalinkTrack || !lavalinkTrack.encoded) {
-                console.warn(`[MusicPlayer] ⚠️ Invalid track data for ${track.title}`);
+                console.warn(`[MusicPlayer] ⚠️ Failed to resolve ${track.title} on all nodes. Skipping...`);
+                queue.isPlaying = false;
+                playbackMutex.delete(guildId);
                 return this.processQueue(guildId, _skipCount + 1);
             }
 
+            queue.isPlaying = true;
             await queue.player.playTrack({ track: { encoded: lavalinkTrack.encoded } });
-            console.log(`[MusicPlayer] ✅ Playback initiated: ${track.title}`);
-
+            
+            console.log(`[MusicPlayer] ✅ Playback started: ${track.title}`);
             queue.currentTrack = track;
-
+            
             await MusicUIController.sendPlaybackUI(guildId, track);
 
             if (track.artistName && track.trackTitle) {
                 this.handleScrobbling(guildId, track);
             }
         } catch (err: any) {
-            console.error(`[MusicPlayer] Critical Playback Error:`, err);
+            console.error(`[MusicPlayer] ❌ Critical Playback Error for guild ${guildId}:`, err);
             queue.textChannel.send(`❌ **Playback Failed**: ${err.message || 'Unknown error'}. Skipping...`);
-            queue.currentTrack = null;
             queue.isPlaying = false;
+            playbackMutex.delete(guildId);
             this.processQueue(guildId, _skipCount + 1).catch(() => { });
+        } finally {
+            playbackMutex.delete(guildId);
         }
     }
 
@@ -395,20 +459,12 @@ export class MusicPlayer {
             queue.isPaused = false;
             
             VoteSkipCommand.resetVotes(guildId);
-
             const track = queue.currentTrack;
             if (track) {
                 try {
                     await UserHistory.findOneAndUpdate(
                         { userId: track.requesterId || 'Unknown' },
-                        { 
-                            $push: { 
-                                lastPlayed: { 
-                                    $each: [{ title: track.title, url: track.url, playedAt: new Date() }],
-                                    $slice: -50 
-                                } 
-                            }
-                        },
+                        { $push: { lastPlayed: { $each: [{ title: track.title, url: track.url, playedAt: new Date() }], $slice: -50 } } },
                         { upsert: true, new: true, setDefaultsOnInsert: true }
                     ).catch(() => {});
                 } catch {}
@@ -437,8 +493,9 @@ export class MusicPlayer {
             VoiceStatusService.clearStatus(client, queue.voiceChannelId);
             VoiceStatusService.updatePresence(client, null);
 
+            // Kickstart next track
             this.processQueue(guildId).catch(err => {
-                console.error(`[MusicPlayer] Error in processQueue after track end:`, err);
+                console.error(`[MusicPlayer] End event processQueue error:`, err);
             });
         });
 
@@ -454,7 +511,6 @@ export class MusicPlayer {
         if (!queue) return;
 
         this.stopProgressUpdate(guildId);
-
         queue.progressInterval = setInterval(() => {
             MusicUIController.updateNowPlayingMessage(guildId);
         }, 15000);
@@ -477,7 +533,6 @@ export class MusicPlayer {
             if (voiceChannel) {
                 await guild.members.fetch(); 
                 const listeners = voiceChannel.members.filter(m => !m.user.bot).map(m => m.id);
-                
                 const art = track.artistName || track.channelTitle.replace(' - Topic', '');
                 const tit = track.trackTitle || track.title;
 
