@@ -431,10 +431,11 @@ export class MusicPlayer {
             console.log(`[MusicPlayer] ✅ Playback started: ${track.title}`);
             queue.currentTrack = track;
             
-            await MusicUIController.sendPlaybackUI(guildId, track);
+            // Do not await UI or scrobbling - keep the queue moving
+            MusicUIController.sendPlaybackUI(guildId, track).catch(e => console.error(`[MusicPlayer] UI Error:`, e));
 
             if (track.artistName && track.trackTitle) {
-                this.handleScrobbling(guildId, track);
+                this.handleScrobbling(guildId, track).catch(e => console.error(`[MusicPlayer] Scrobbling Error:`, e));
             }
         } catch (err: any) {
             console.error(`[MusicPlayer] ❌ Critical Playback Error for guild ${guildId}:`, err);
@@ -461,21 +462,13 @@ export class MusicPlayer {
             VoteSkipCommand.resetVotes(guildId);
             const track = queue.currentTrack;
             if (track) {
-                try {
-                    await UserHistory.findOneAndUpdate(
-                        { userId: track.requesterId || 'Unknown' },
-                        { $push: { lastPlayed: { $each: [{ title: track.title, url: track.url, playedAt: new Date() }], $slice: -50 } } },
-                        { upsert: true, new: true, setDefaultsOnInsert: true }
-                    ).catch(() => {});
-                } catch {}
-
                 const title = track.trackTitle || track.title;
                 VoiceStatusService.setTrackStatus(client, queue.voiceChannelId, title);
                 VoiceStatusService.updatePresence(client, title);
             }
 
             this.startProgressUpdate(guildId);
-            MusicUIController.updateNowPlayingMessage(guildId);
+            MusicUIController.updateNowPlayingMessage(guildId).catch(() => {});
         });
 
         queue.player.on('stuck', () => {
@@ -512,7 +505,7 @@ export class MusicPlayer {
 
         this.stopProgressUpdate(guildId);
         queue.progressInterval = setInterval(() => {
-            MusicUIController.updateNowPlayingMessage(guildId);
+            MusicUIController.updateNowPlayingMessage(guildId).catch(() => {});
         }, 15000);
     }
 
@@ -529,18 +522,19 @@ export class MusicPlayer {
         if (!queue) return;
         try {
             const guild = queue.textChannel.guild;
-            const voiceChannel = await guild.channels.fetch(queue.voiceChannelId) as VoiceChannel;
+            const voiceChannel = guild.channels.cache.get(queue.voiceChannelId) as VoiceChannel;
             if (voiceChannel) {
-                await guild.members.fetch(); 
                 const listeners = voiceChannel.members.filter(m => !m.user.bot).map(m => m.id);
+                if (listeners.length === 0) return;
+
                 const art = track.artistName || track.channelTitle.replace(' - Topic', '');
                 const tit = track.trackTitle || track.title;
 
-                if (listeners.length > 0 && art && tit) {
+                if (art && tit) {
                     const res = await ScrobbleService.scrobbleForUsers(listeners, { artist: art, track: tit });
                     const successCount = res.filter(r => r.status === 'fulfilled').length;
                     (track as any).scrobbleCount = successCount;
-                    MusicUIController.updateNowPlayingMessage(guildId);
+                    MusicUIController.updateNowPlayingMessage(guildId).catch(() => {});
                 }
             }
         } catch (err: any) {

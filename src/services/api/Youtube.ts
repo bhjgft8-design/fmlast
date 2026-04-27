@@ -46,11 +46,19 @@ export class Youtube {
     public static async searchByQuery(query: string): Promise<YoutubeResult[]> {
         const nodes = Array.from(shoukaku.nodes.values());
         
+        // Helper for timeout
+        const withTimeout = (promise: Promise<any>, ms: number) => {
+            return Promise.race([
+                promise,
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), ms))
+            ]);
+        };
+
         for (const node of nodes) {
             try {
                 if (!node || node.state !== 1) continue; // 1 = CONNECTED
 
-                const res = await node.rest.resolve(`ytsearch:${query}`);
+                const res = await withTimeout(node.rest.resolve(`ytsearch:${query}`), 10000) as any;
                 if (!res || !res.data || res.loadType === 'error' || res.loadType === 'empty') continue;
 
                 const tracks = Array.isArray(res.data) ? res.data : [res.data];
@@ -64,16 +72,16 @@ export class Youtube {
                     durationSeconds: Math.floor(track.info.length / 1000),
                 }));
             } catch (error) {
-                console.warn(`[Youtube] Search failed on node ${node.name}: ${error instanceof Error ? error.message : String(error)}`);
+                console.warn(`[Youtube] Search failed/timed out on node ${node.name}: ${error instanceof Error ? error.message : String(error)}`);
             }
         }
 
-        // Final fallback to youtube-sr with extra safety
+        // Final fallback to youtube-sr with extra safety and timeout
         try {
-            const results = await YouTubeSR.search(query, {
+            const results = await withTimeout(YouTubeSR.search(query, {
                 limit: 5,
                 type: 'video',
-            });
+            }), 8000) as any[];
 
             if (!results || !Array.isArray(results)) return [];
 
@@ -87,7 +95,7 @@ export class Youtube {
                 durationSeconds: Math.floor((video.duration ?? 0) / 1000),
             }));
         } catch (srError) {
-            console.error(`[Youtube] All search methods failed (including youtube-sr crash):`, srError);
+            console.error(`[Youtube] All search methods failed or timed out:`, srError instanceof Error ? srError.message : srError);
             return [];
         }
     }
