@@ -426,12 +426,16 @@ export class MusicPlayer {
             }
 
             queue.isPlaying = true;
+            queue.currentTrack = track; // Set BEFORE playTrack to avoid race condition
+            
             await queue.player.playTrack({ track: { encoded: lavalinkTrack.encoded } });
             
             console.log(`[MusicPlayer] ✅ Playback started: ${track.title}`);
-            queue.currentTrack = track;
             
-            // Do not await UI or scrobbling - keep the queue moving
+            // Trigger UI and status updates immediately (do not await to keep queue moving)
+            const displayTitle = track.artistName ? `${track.artistName} - ${track.trackTitle || track.title}` : track.title;
+            VoiceStatusService.setTrackStatus(client, queue.voiceChannelId, displayTitle).catch(() => {});
+            VoiceStatusService.updatePresence(client, displayTitle).catch(() => {});
             MusicUIController.sendPlaybackUI(guildId, track).catch(e => console.error(`[MusicPlayer] UI Error:`, e));
 
             if (track.artistName && track.trackTitle) {
@@ -460,13 +464,6 @@ export class MusicPlayer {
             queue.isPaused = false;
             
             VoteSkipCommand.resetVotes(guildId);
-            const track = queue.currentTrack;
-            if (track) {
-                const title = track.trackTitle || track.title;
-                VoiceStatusService.setTrackStatus(client, queue.voiceChannelId, title);
-                VoiceStatusService.updatePresence(client, title);
-            }
-
             this.startProgressUpdate(guildId);
             MusicUIController.updateNowPlayingMessage(guildId).catch(() => {});
         });
