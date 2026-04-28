@@ -47,7 +47,7 @@ export class VoiceStatusService {
             // Default presence
             client.user.setPresence({
                 activities: [{
-                    name: 'music!',
+                    name: 'I AM THE MUSIC',
                     type: 2
                 }],
                 status: 'online'
