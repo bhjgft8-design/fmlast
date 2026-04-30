@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import handlebars from 'handlebars';
 import { LoggerService } from '../bot/LoggerService';
+import { config } from '../../../config';
 
 // Register Handlebars Helpers
 handlebars.registerHelper('eq', (a, b) => a === b);
@@ -17,7 +18,7 @@ handlebars.registerHelper('minus', (a, b) => a - b);
 export class PuppeteerService {
     private static browser: Browser | null = null;
     private static pagePool: Page[] = [];
-    private static MAX_POOL_SIZE = 3;
+    private static MAX_POOL_SIZE = config.PUPPETEER.POOL_SIZE;
     private static isLaunching = false;
 
     /**

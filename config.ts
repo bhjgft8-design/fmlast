@@ -45,4 +45,9 @@ export const config = {
             secure: true
         }
     ],
+    // Puppeteer Settings
+    PUPPETEER: {
+        POOL_SIZE: 1, // Reduced for Railway RAM savings
+        WARMUP: true,
+    },
 };
