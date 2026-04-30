@@ -37,10 +37,11 @@ export class MusicInteractionHandler {
                 MusicPlayer.resume(guildId);
                 await interaction.deferUpdate();
                 break;
-            case 'mp-skip':
-                MusicPlayer.skip(guildId);
-                await interaction.reply({ content: '⏭️ Skipping...', ephemeral: true });
+            case 'mp-skip': {
+                const VoteSkipCommand = (await import('../../commands/music/voteskip')).default;
+                await VoteSkipCommand.handleVote(interaction, guildId);
                 break;
+            }
             case 'mp-stop':
                 MusicPlayer.stop(guildId);
                 await interaction.reply({ content: '🛑 Stopped and cleared.', ephemeral: true });
@@ -53,28 +54,32 @@ export class MusicInteractionHandler {
                 await interaction.deferUpdate();
                 break;
             case 'mp-lyrics': {
+                await interaction.deferReply({ ephemeral: false });
                 const lyrics = await MusicPlayer.getLyrics(guildId);
                 if (!lyrics) {
-                    return interaction.reply({ content: '❌ No lyrics found for this track.', ephemeral: true });
+                    return interaction.editReply({ content: '❌ No lyrics found for this track.' });
                 }
                 if (lyrics.lines && lyrics.lines.length > 0) {
                     const queue = QueueManager.getQueue(guildId);
                     const pos = queue?.player?.position ?? 0;
                     const firstFrame = LyricsService.buildLiveLyricsUI(lyrics.lines, pos, guildId);
                     
-                    const msg = await interaction.reply({ ...firstFrame, fetchReply: true }) as unknown as Message;
+                    const msg = await interaction.editReply({ ...firstFrame }) as unknown as Message;
                     await LyricsService.startLiveLyrics(guildId, msg, lyrics.lines);
                 } else {
                     const builder = new ComponentsV2()
                         .setAccent(0x1DB954)
                         .addText(`### 🎤 Lyrics\n\n${(lyrics.text || '').substring(0, 3500)}`);
-                    await interaction.reply({ ...builder.build(), ephemeral: true });
+                    await interaction.editReply(builder.build());
                 }
                 break;
             }
             case 'mp-lyrics-stop': {
                 LyricsService.stopLiveLyrics(guildId);
-                await interaction.update({ content: '⏹️ Lyrics sync stopped.', components: [], flags: [] });
+                const stopBuilder = new ComponentsV2()
+                    .setAccent(0x1DB954)
+                    .addText('⏹️ Lyrics sync stopped.');
+                await interaction.update(stopBuilder.build());
                 break;
             }
             case 'mp-lyrics-full': {
@@ -107,6 +112,10 @@ export class MusicInteractionHandler {
                     .addThumbnail(track.artworkUrl || track.thumbnail, 
                         `### ℹ️ Track Info\n**Title:** ${track.title}\n**Artist:** ${track.artistName || track.channelTitle}\n**Duration:** ${track.duration}\n**Requester:** ${track.requesterName}`)
                 await interaction.reply({ ...infoBuilder.build(), ephemeral: true });
+                break;
+            case 'mp-autoplay':
+                MusicPlayer.toggleAutoplay(guildId);
+                await interaction.deferUpdate();
                 break;
             case 'mp-volume':
                 const volModal = {

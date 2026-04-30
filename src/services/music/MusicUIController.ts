@@ -5,7 +5,7 @@ import { createProgressBar, formatDuration } from '../../utils/formatDuration';
 import { Message, TextChannel } from 'discord.js';
 
 export class MusicUIController {
-    
+
     /**
      * Builds and sends the playback UI to the queue's text channel.
      * Replaces the old message if it exists.
@@ -15,7 +15,7 @@ export class MusicUIController {
         if (!queue) return;
 
         if (queue.nowPlayingMessage) {
-            queue.nowPlayingMessage.delete().catch(() => {});
+            queue.nowPlayingMessage.delete().catch(() => { });
             queue.nowPlayingMessage = undefined;
         }
 
@@ -37,10 +37,10 @@ export class MusicUIController {
             if (res.ok) {
                 queue.hasLyrics = true;
             }
-        } catch {}
+        } catch { }
 
         const ui = await this.buildPlaybackUI(guildId, track, 0, false);
-        
+
         try {
             const msg = await queue.textChannel.send(ui);
             queue.nowPlayingMessage = msg;
@@ -59,7 +59,12 @@ export class MusicUIController {
         const track = queue.currentTrack;
         if (!track) return;
 
-        const elapsed = queue.player ? Math.floor(queue.player.position / 1000) : 0;
+        let elapsedMs = queue.player?.position ?? 0;
+        if (!queue.isPaused && queue.lastUpdate) {
+            elapsedMs += (Date.now() - queue.lastUpdate);
+        }
+        const elapsed = Math.floor(elapsedMs / 1000);
+
         const ui = await this.buildPlaybackUI(guildId, track, elapsed, queue.isPaused);
 
         try {
@@ -77,8 +82,9 @@ export class MusicUIController {
         const queue = QueueManager.getQueue(guildId);
         const total = track.durationSeconds || 0;
         const progressBar = createProgressBar(elapsed, total);
+
         const timeInfo = `\`${formatDuration(elapsed)} / ${track.duration || '0:00'}\``;
-        
+
         let repeatInfo = '';
         let autoplayInfo = '';
         if (queue) {
@@ -87,7 +93,7 @@ export class MusicUIController {
             if (queue.autoplay) autoplayInfo = ' 🤖';
         }
 
-        const scrobbleInfo = (track as any).scrobbleCount ? ` • 🚀 Scrobbling for ${(track as any).scrobbleCount} users` : '';
+        const scrobbleInfo = (track as any).scrobbleCount ? ` •  Scrobbling for ${(track as any).scrobbleCount} users` : '';
         const statsLine = track.statsText ? (track.statsText.startsWith('\n') ? track.statsText : `\n${track.statsText}`) : '';
 
         const coverUrl = track.artworkUrl || track.thumbnail || 'https://i.imgur.com/Gis9d79.png';
@@ -104,34 +110,35 @@ export class MusicUIController {
 
         const builder = new ComponentsV2()
             .setAccent(embedColor)
-            .addThumbnail(coverUrl, 
-                `### 🎵 ${artistDisplay} - ${titleDisplay}${repeatInfo}${autoplayInfo}\n` +
+            .addThumbnail(coverUrl,
+                `###  ${artistDisplay} - ${titleDisplay}${repeatInfo}${autoplayInfo}\n` +
                 `${statsLine ? statsLine.trimStart() + '\n\n' : ''}` +
                 `${progressBar} ${timeInfo}\n\n` +
                 `-# Added to queue by ${track.requesterName || 'Unknown'}${scrobbleInfo}`
             )
             .addSeparator();
 
-        const repeatLabels: Record<string, string> = { 'off': '🔁 Off', 'one': '🔂 One', 'all': '🔁 All' };
+        const repeatEmojis: Record<string, string> = { 'off': '🔁', 'one': '🔂', 'all': '🔁' };
         const repeatMode = queue?.repeatMode || 'off';
 
         // ROW 1: Playback Controls
         builder.addRow([
-            { type: 2, style: 2, label: isPaused ? '▶️' : '⏸️', custom_id: isPaused ? `mp-resume:${guildId}` : `mp-pause:${guildId}` },
-            { type: 2, style: 2, label: '⏭️', custom_id: `mp-skip:${guildId}` },
-            { type: 2, style: 2, label: repeatLabels[repeatMode] || '🔁', custom_id: `mp-repeat:${guildId}` },
-            { type: 2, style: 2, label: '🔊', custom_id: `mp-volume:${guildId}` },
-            { type: 2, style: 4, label: '🛑', custom_id: `mp-stop:${guildId}` }
+            { type: 2, style: 2, label: '', emoji: isPaused ? '▶️' : '⏸️', custom_id: isPaused ? `mp-resume:${guildId}` : `mp-pause:${guildId}` },
+            { type: 2, style: 2, label: '', emoji: '⏭️', custom_id: `mp-skip:${guildId}` },
+            { type: 2, style: 2, label: '', emoji: repeatEmojis[repeatMode] || '🔁', custom_id: `mp-repeat:${guildId}` },
+            { type: 2, style: 2, label: '', emoji: '🔊', custom_id: `mp-volume:${guildId}` },
+            { type: 2, style: 4, label: '', emoji: '🛑', custom_id: `mp-stop:${guildId}` }
         ]);
 
         // ROW 2: Library & Info
-        const row2 = [
-            { type: 2, style: 2, label: '🔀 Shuffle', custom_id: `mp-shuffle:${guildId}` },
-            { type: 2, style: 2, label: '📄 Queue', custom_id: `mp-queue:${guildId}` },
-            { type: 2, style: 2, label: 'ℹ️ Info', custom_id: `mp-trackinfo:${guildId}` }
+        const row2: any[] = [
+            { type: 2, style: 2, label: '', emoji: '🔀', custom_id: `mp-shuffle:${guildId}` },
+            { type: 2, style: 2, label: '', emoji: '📄', custom_id: `mp-queue:${guildId}` },
+            { type: 2, style: 2, label: '', emoji: 'ℹ️', custom_id: `mp-trackinfo:${guildId}` },
+            { type: 2, style: queue?.autoplay ? 3 : 2, label: '', emoji: '🤖', custom_id: `mp-autoplay:${guildId}` }
         ];
         if (queue?.hasLyrics) {
-            row2.push({ type: 2, style: 1, label: '🎤 Lyrics', custom_id: `mp-lyrics:${guildId}` });
+            row2.push({ type: 2, style: 1, label: '', emoji: '🎤', custom_id: `mp-lyrics:${guildId}` });
         }
         builder.addRow(row2);
 

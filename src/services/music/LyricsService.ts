@@ -40,7 +40,6 @@ export class LyricsService {
             }
 
             const frame = this.buildLiveLyricsUI(lines, q.player.position, guildId);
-            frame.content = '';
             await message.edit(frame).catch((err) => {
                 console.error('[LyricsService] Error editing interval frame:', err);
                 this.stopLiveLyrics(guildId);

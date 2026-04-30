@@ -27,6 +27,7 @@ export interface GuildQueue {
     };
     hasLyrics?: boolean;
     autoplay?: boolean;
+    lastUpdate?: number;
 }
 
 const queues = new Map<string, GuildQueue>();

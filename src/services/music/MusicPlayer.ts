@@ -207,6 +207,16 @@ export class MusicPlayer {
         }
     }
 
+    static toggleAutoplay(guildId: string): boolean {
+        const queue = QueueManager.getQueue(guildId);
+        if (queue) {
+            queue.autoplay = !queue.autoplay;
+            this.updateNowPlayingMessage(guildId);
+            return queue.autoplay;
+        }
+        return false;
+    }
+
     static async updateNowPlayingMessage(guildId: string): Promise<void> {
         return MusicUIController.updateNowPlayingMessage(guildId);
     }
@@ -428,15 +438,18 @@ export class MusicPlayer {
             queue.isPlaying = true;
             queue.currentTrack = track; // Set BEFORE playTrack to avoid race condition
             
+            // Send UI first and wait for it
+            await MusicUIController.sendPlaybackUI(guildId, track).catch(e => console.error(`[MusicPlayer] UI Error:`, e));
+
+            // Then start audio
             await queue.player.playTrack({ track: { encoded: lavalinkTrack.encoded } });
             
             console.log(`[MusicPlayer] ✅ Playback started: ${track.title}`);
             
-            // Trigger UI and status updates immediately (do not await to keep queue moving)
+            // Background status updates
             const displayTitle = track.artistName ? `${track.artistName} - ${track.trackTitle || track.title}` : track.title;
             VoiceStatusService.setTrackStatus(client, queue.voiceChannelId, displayTitle).catch(() => {});
             VoiceStatusService.updatePresence(client, displayTitle).catch(() => {});
-            MusicUIController.sendPlaybackUI(guildId, track).catch(e => console.error(`[MusicPlayer] UI Error:`, e));
 
             if (track.artistName && track.trackTitle) {
                 this.handleScrobbling(guildId, track).catch(e => console.error(`[MusicPlayer] Scrobbling Error:`, e));
@@ -462,10 +475,15 @@ export class MusicPlayer {
             console.log(`[Lavalink] Playback started in guild ${guildId}`);
             queue.isPlaying = true;
             queue.isPaused = false;
+            queue.lastUpdate = Date.now();
             
             VoteSkipCommand.resetVotes(guildId);
             this.startProgressUpdate(guildId);
             MusicUIController.updateNowPlayingMessage(guildId).catch(() => {});
+        });
+
+        queue.player.on('update', () => {
+            queue.lastUpdate = Date.now();
         });
 
         queue.player.on('stuck', () => {
@@ -498,12 +516,11 @@ export class MusicPlayer {
 
     private static startProgressUpdate(guildId: string) {
         const queue = QueueManager.getQueue(guildId);
-        if (!queue) return;
+        if (!queue || queue.progressInterval) return;
 
-        this.stopProgressUpdate(guildId);
         queue.progressInterval = setInterval(() => {
             MusicUIController.updateNowPlayingMessage(guildId).catch(() => {});
-        }, 15000);
+        }, 5000);
     }
 
     private static stopProgressUpdate(guildId: string) {
