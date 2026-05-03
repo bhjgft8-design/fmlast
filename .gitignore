@@ -20,6 +20,9 @@ scratch/
 .gemini/
 *.log
 
+# Allow pics/ folder images (override the global ignore above)
+!pics/**
+
 # OS generated files
 .DS_Store
 Thumbs.db
