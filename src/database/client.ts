@@ -9,7 +9,8 @@ if (!connectionString) {
     throw new Error('DATABASE_URL is not defined in .env');
 }
 
-const pool = new Pool({ connectionString });
+// Export pool for high-performance raw bulk inserts (bypasses Prisma overhead)
+export const pool = new Pool({ connectionString });
 const adapter = new PrismaPg(pool);
 
 export const prisma = new PrismaClient({

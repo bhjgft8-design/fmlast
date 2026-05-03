@@ -143,6 +143,8 @@ async function handleSyncStaleUsers(): Promise<void> {
 
     // Sync all users who haven't updated in over 12 hours (FMBot parity)
     const staleThreshold = Math.floor(Date.now() / 1000) - (12 * 3600);
+    // Skip users inactive > 2 months (mirrors FMBot's LastUsed > now - 2 months filter)
+    const activeThreshold = Math.floor(Date.now() / 1000) - (60 * 86400);
 
     const allLinkedUsers = await prisma.user.findMany({
         where: { lastfmUsername: { not: null } },
@@ -152,7 +154,9 @@ async function handleSyncStaleUsers(): Promise<void> {
     const staleUsers = allLinkedUsers.filter(u => {
         const settings = (u.settings as any) || {};
         const lastSync = settings.lastSyncTimestamp || 0;
-        return lastSync < staleThreshold;
+        const lastUsed = settings.lastUsed || 0;
+        // Must be: stale (not synced in 12h) AND active (used bot in last 2 months)
+        return lastSync < staleThreshold && lastUsed >= activeThreshold;
     });
 
     if (staleUsers.length === 0) return;

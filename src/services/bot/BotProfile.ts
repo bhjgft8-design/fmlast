@@ -1,6 +1,6 @@
 import { config } from '../../../config';
 import { prisma } from '../../database/client';
-import { indexQueue, triggerDeltaSync } from './QueueWorker';
+import { fullQueue, triggerDeltaSync } from './QueueWorker';
 
 /**
  * Initializes the global bot profile in the database and triggers its synchronization.
@@ -25,12 +25,12 @@ export async function initBotProfile() {
             });
             
             // Trigger sync for bot stats
-            if (indexQueue) {
+            if (fullQueue) {
                 const settings: any = user.settings || {};
 
                 if (!settings.lastSyncTimestamp) {
                     // Force a fast FULL_SYNC for the first time
-                    await indexQueue.add(`full-${botId}`, { discordId: botId, type: 'FULL_SYNC' }, {
+                    await fullQueue.add(`full-${botId}`, { discordId: botId, type: 'FULL_SYNC' }, {
                         jobId: `full-${botId}`,
                         removeOnComplete: true,
                         removeOnFail: true

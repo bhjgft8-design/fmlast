@@ -2,7 +2,7 @@ import { Interaction, Client, ComponentType, ButtonStyle } from 'discord.js';
 import { BaseInteractionHandler } from './BaseInteractionHandler';
 import { prisma } from '../../database/client';
 import { LastFM } from '../../services/api/LastFM';
-import { indexQueue } from '../../services/bot/QueueWorker';
+import { fullQueue } from '../../services/bot/QueueWorker';
 import { ComponentsV2 } from '../../utils/ComponentsV2';
 import { LoggerService } from '../../services/bot/LoggerService';
 import { config } from '../../../config';
@@ -65,16 +65,16 @@ export class AccountHandler extends BaseInteractionHandler {
                 await interaction.deferUpdate().catch(() => {});
                 const username = await LastFM.completeLogin(interaction.user.id);
                 
-                if (indexQueue) {
-                    await indexQueue.drain().catch(() => {});
-                    const existing = await indexQueue.getJob(`full-${interaction.user.id}`);
+                if (fullQueue) {
+                    await fullQueue.drain().catch(() => {});
+                    const existing = await fullQueue.getJob(`full-${interaction.user.id}`);
                     if (existing) {
                         const state = await existing.getState();
                         if (state !== 'active') {
                             await existing.remove().catch(() => {});
                         }
                     }
-                    await indexQueue.add('index-user', { discordId: interaction.user.id, type: 'FULL_SYNC' }, {
+                    await fullQueue.add('index-user', { discordId: interaction.user.id, type: 'FULL_SYNC' }, {
                         jobId: `full-${interaction.user.id}`,
                         removeOnComplete: true,
                         removeOnFail: true
@@ -119,8 +119,8 @@ export class AccountHandler extends BaseInteractionHandler {
 
                 await interaction.update(updateBuilder.build());
 
-                if (indexQueue) {
-                    await indexQueue.add(`import-${jobId}`, { 
+                if (fullQueue) {
+                    await fullQueue.add(`import-${jobId}`, { 
                         type: 'HISTORY_IMPORT',
                         jobId: jobId,
                         discordId: interaction.user.id

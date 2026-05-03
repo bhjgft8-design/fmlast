@@ -9,11 +9,27 @@ import { MusicBotService } from '../services/bot/MusicBotService';
 import { ComponentsV2 } from '../utils/ComponentsV2';
 import { existsSync } from 'fs';
 import { resolve, join } from 'path';
+import { prisma } from '../database/client';
 
 const PICS_DIR = resolve(__dirname, '../../pics');
 
 // Initialize the dispatcher
 InteractionDispatcher.init();
+
+/** Fire-and-forget: stamp lastUsed in settings so inactive users can be filtered from background syncs */
+function touchLastUsed(discordId: string): void {
+    const now = Math.floor(Date.now() / 1000);
+    prisma.user.findUnique({ where: { discordId }, select: { settings: true } })
+        .then(u => {
+            if (!u) return;
+            const settings: any = u.settings || {};
+            // Only write if > 1 hour since last touch to avoid hammering the DB
+            if (now - (settings.lastUsed || 0) < 3600) return;
+            settings.lastUsed = now;
+            return prisma.user.update({ where: { discordId }, data: { settings } });
+        })
+        .catch(() => {}); // silent — never block the command
+}
 
 export async function handleMessage(message: Message, client: Client) {
     if (message.author.bot) {
@@ -42,6 +58,7 @@ export async function handleMessage(message: Message, client: Client) {
 
     try {
         await command.execute(message, false, args);
+        touchLastUsed(message.author.id);
     } catch (error) {
         const traceId = randomBytes(4).toString('hex').toUpperCase();
         LoggerService.error(`Command Error [${commandName}] (Trace: ${traceId})`, error, 'CommandHandler');
@@ -71,6 +88,7 @@ export async function handleInteraction(interaction: Interaction, client: Client
         if (!command) return;
         try {
             await command.execute(interaction, true);
+            touchLastUsed(interaction.user.id);
         } catch (error) {
             const traceId = randomBytes(4).toString('hex').toUpperCase();
             LoggerService.error(`Interaction Error [${interaction.commandName}] (Trace: ${traceId})`, error, 'InteractionHandler');
