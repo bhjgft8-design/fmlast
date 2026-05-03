@@ -1,4 +1,4 @@
-import { Client, Events, Interaction, ButtonInteraction, ButtonStyle, EmbedBuilder, Message, StringSelectMenuInteraction, ModalSubmitInteraction, CacheType, ComponentType, TextInputStyle } from "discord.js";
+import { Client, Events, Interaction, ButtonInteraction, ButtonStyle, EmbedBuilder, Message, StringSelectMenuInteraction, ModalSubmitInteraction, CacheType, ComponentType, TextInputStyle, AttachmentBuilder } from "discord.js";
 import { commands } from './commandHandler';
 import { config } from '../../config';
 import { MusicInteractionHandler } from './music/MusicInteractionHandler';
@@ -7,6 +7,10 @@ import { randomBytes } from 'crypto';
 import { InteractionDispatcher } from './interactions/InteractionDispatcher';
 import { MusicBotService } from '../services/bot/MusicBotService';
 import { ComponentsV2 } from '../utils/ComponentsV2';
+import { existsSync } from 'fs';
+import { resolve, join } from 'path';
+
+const PICS_DIR = resolve(__dirname, '../../pics');
 
 // Initialize the dispatcher
 InteractionDispatcher.init();
@@ -15,6 +19,15 @@ export async function handleMessage(message: Message, client: Client) {
     if (message.author.bot) {
         await MusicBotService.handleMessage(message).catch(console.error);
         return;
+    }
+
+    // 🎂 Birthday easter egg — reply with birthday.jpg when someone @mentions the bot with "عيد ميلاد"
+    if (client.user && message.mentions.has(client.user.id) && message.content.includes('عيد ميلاد')) {
+        const birthdayPath = join(PICS_DIR, 'birthday.jpg');
+        if (existsSync(birthdayPath)) {
+            const attachment = new AttachmentBuilder(birthdayPath, { name: 'birthday.jpg' });
+            await message.reply({ files: [attachment] }).catch(() => {});
+        }
     }
 
     if (!message.content.startsWith(config.PREFIX)) return;
