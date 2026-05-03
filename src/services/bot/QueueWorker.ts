@@ -186,7 +186,7 @@ async function handleIndexing(job: Job<IndexJobData>) {
 
     let firstPage;
     try {
-        firstPage = await LastFM.getRecentTracksPaginated(username, 200, 1, sessionKey, !!sessionKey, fromTimestamp);
+        firstPage = await LastFM.getRecentTracksPaginated(username, 1000, 1, sessionKey, !!sessionKey, fromTimestamp);
     } catch (e: any) {
         console.error(`[Queue] Failed first page for ${username}: ${e.message}`);
         return;
@@ -378,7 +378,7 @@ async function handleIndexing(job: Job<IndexJobData>) {
         while (retries < 4) {
             try {
                 if (p === 1) pageData = firstPage;
-                else pageData = await LastFM.getRecentTracksPaginated(username, 200, p, sessionKey, !!sessionKey, fromTimestamp);
+                else pageData = await LastFM.getRecentTracksPaginated(username, 1000, p, sessionKey, !!sessionKey, fromTimestamp);
                 if (pageData.tracks) processPage(pageData.tracks);
                 break;
             } catch (err: any) {
@@ -389,7 +389,7 @@ async function handleIndexing(job: Job<IndexJobData>) {
             }
         }
 
-        if (!isDelta && (p % 5 === 0 || p === totalPages)) {
+        if (!isDelta && (p % 2 === 0 || p === totalPages)) {
             console.log(`[Queue] [${username}] Flushing page ${p}/${totalPages} to database...`);
             await withTimeout(flushPlaysToDB(pendingPlays), 120000, `flushPlaysToDB page ${p}`);
             pendingPlays = [];
@@ -398,8 +398,7 @@ async function handleIndexing(job: Job<IndexJobData>) {
             await withTimeout(diffAndFlushDelta(pendingPlays), 120000, `diffAndFlushDelta`);
             pendingPlays = [];
         } else if (!isDelta) {
-            // Log every 2 pages to show it's moving
-            if (p % 2 === 0) console.log(`[Queue] [${username}] Syncing page ${p}/${totalPages}...`);
+            if (p % 1 === 0) console.log(`[Queue] [${username}] Syncing page ${p}/${totalPages}...`);
         }
         if (p !== 1) await new Promise(r => setTimeout(r, 100));
     }
