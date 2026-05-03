@@ -1,7 +1,7 @@
 import { BaseCommand } from '../../structures/BaseCommand';
 import { LastFM } from '../../services/api/LastFM';
 import { prisma } from '../../database/client';
-import { triggerDeltaSync, fullQueue } from '../../services/bot/QueueWorker';
+import { triggerDeltaSync } from '../../services/bot/QueueWorker';
 import { ComponentsV2 } from '../../utils/ComponentsV2';
 import { SettingService } from '../../services/bot/SettingService';
 import { SlashCommandBuilder, TextChannel } from 'discord.js';
@@ -46,21 +46,13 @@ export default class UpdateCommand extends BaseCommand {
             const settings = (dbUser.settings as any) || {};
             const lastSyncUts: number = settings.lastSyncTimestamp || 0;
 
-            // Route to FULL_SYNC if gap is too large for a delta (> 1000 plays missing)
-            // This mirrors FMBot's behaviour: big gaps → full reindex, small gaps → delta
-            const needsFullSync = gap > 1000;
+            // Queue a forced delta sync — fetches plays since lastSyncTimestamp and diffs them.
+            // This is exactly what FMBot's /update does: surgical, not a full wipe.
+            // The new (userId, timePlayed, artistName, trackName) unique constraint means
+            // previously-dropped duplicate-timestamp plays will now be correctly inserted.
+            await triggerDeltaSync(userId, true);
 
-            if (needsFullSync) {
-                await fullQueue.add(`full-${userId}`, { discordId: userId, type: 'FULL_SYNC' }, {
-                    jobId: `full-${userId}`,
-                    removeOnComplete: true,
-                    removeOnFail: true
-                });
-            } else {
-                await triggerDeltaSync(userId, true);
-            }
-
-            // Build response — mirrors FMBot's /update output
+            // Build response
             const builder = new ComponentsV2().setAccent(embedColor);
             builder.addText(`### Last.fm Indexing Update for ${dbUser.lastfmUsername}`);
 
@@ -70,11 +62,7 @@ export default class UpdateCommand extends BaseCommand {
             );
 
             if (gap > 0) {
-                if (needsFullSync) {
-                    builder.addText(`🔄 **Full re-index queued** — ${gap.toLocaleString()} missing plays will be imported. This may take a few minutes.`);
-                } else {
-                    builder.addText(`⏳ **${gap.toLocaleString()} play${gap === 1 ? '' : 's'}** will be indexed in the background.`);
-                }
+                builder.addText(`⏳ **${gap.toLocaleString()} play${gap === 1 ? '' : 's'}** queued to be indexed.`);
             } else {
                 builder.addText(`✅ Your index is already **up to date!**`);
             }
@@ -84,11 +72,8 @@ export default class UpdateCommand extends BaseCommand {
             }
 
             builder.addSeparator();
-            if (needsFullSync) {
-                builder.addText(`-# ⚡ Full sync queued — wipe & re-import all plays.`);
-            } else {
-                builder.addText(`-# 🔄 Delta sync queued — your stats will update shortly.`);
-            }
+            builder.addText(`-# 🔄 Delta sync queued — fetching plays since last sync.`);
+
 
             const payload = builder.build();
             if (isSlash) await interactionOrMessage.editReply(payload);
