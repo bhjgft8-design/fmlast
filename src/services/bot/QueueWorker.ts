@@ -108,14 +108,16 @@ async function handleIndexing(job: Job<IndexJobData>) {
     let isDelta = _type === 'DELTA_SYNC';
 
     if (isDelta) {
-        // Use the exact timestamp of the last scrobble. 
-        // createMany(skipDuplicates: true) will handle the overlap perfectly.
-        fromTimestamp = settings.lastSyncTimestamp || Math.floor(Date.now() / 1000) - 86400;
-        
-        // FMBot Parity: To catch deleted scrobbles, we fetch an overlapping window (last 3 days)
+        // FMBot Parity: To catch deleted scrobbles, we fetch an overlapping window (last 3 hours)
         // This gives us an overlap window to diff and delete scrobbles removed on Last.fm
-        const threeDaysAgo = Math.floor(Date.now() / 1000) - (86400 * 3);
-        fromTimestamp = Math.min(fromTimestamp, threeDaysAgo);
+        const lastSync = settings.lastSyncTimestamp;
+        const now = Math.floor(Date.now() / 1000);
+        if (lastSync) {
+            fromTimestamp = lastSync - (3 * 3600);
+            fromTimestamp = Math.max(fromTimestamp, now - (14 * 86400));
+        } else {
+            fromTimestamp = now - (14 * 86400);
+        }
     }
 
     // Local L1 cache to avoid hitting Redis for items already seen in THIS sync
@@ -177,22 +179,14 @@ async function handleIndexing(job: Job<IndexJobData>) {
         if (plays.length === 0) return;
         
         console.log(`[Queue] [${username}] Pinging DB before flush...`);
-        await pingDatabase(); // Forces Neon to wake BEFORE resolveBatch starts
+        await pingDatabase();
         
         const startRes = Date.now();
-        // Batch resolve unique combinations to avoid redundant queries
         const uniqueCombos = new Set<string>();
         plays.forEach(p => uniqueCombos.add(`${p.artistName}|||${p.trackName}|||${p.albumName || ''}`));
         
-        // Resolve in one big batch with L1 cache
-        const comboArray = Array.from(uniqueCombos);
-        const idMap = await IdResolutionService.resolveBatch(comboArray, l1Cache);
+        const idMap = await IdResolutionService.resolveBatch(Array.from(uniqueCombos), l1Cache);
         
-        const endRes = Date.now();
-        if (endRes - startRes > 1000) {
-            console.log(`[Queue] ID Resolution took ${endRes - startRes}ms for ${uniqueCombos.size} unique items`);
-        }
-
         let data = plays.map(p => {
             const res = idMap.get(`${p.artistName}|||${p.trackName}|||${p.albumName || ''}`)!;
             return {
@@ -207,52 +201,6 @@ async function handleIndexing(job: Job<IndexJobData>) {
             };
         });
 
-        if (isDelta && data.length > 0) {
-            const minUts = Math.min(...plays.map(p => p.uts));
-            const maxUts = Math.max(...plays.map(p => p.uts));
-            
-            const existingPlays = await prisma.userPlay.findMany({
-                where: { userId: user.id, timePlayed: { gte: new Date(minUts * 1000), lte: new Date(maxUts * 1000) } },
-                select: { id: true, timePlayed: true, artistName: true, trackName: true, albumName: true }
-            });
-            
-            const incomingSet = new Set(data.map(p => `${p.timePlayed.getTime()}|${p.artistName}|${p.trackName}`));
-            const existingSet = new Set(existingPlays.map(p => `${p.timePlayed.getTime()}|${p.artistName}|${p.trackName}`));
-            
-            const addedPlays = data.filter(p => !existingSet.has(`${p.timePlayed.getTime()}|${p.artistName}|${p.trackName}`));
-            const orphanedPlays = existingPlays.filter(p => !incomingSet.has(`${p.timePlayed.getTime()}|${p.artistName}|${p.trackName}`));
-            
-            data = addedPlays; // Only insert truly new plays
-            
-            if (orphanedPlays.length > 0) {
-                console.log(`[Queue] Found ${orphanedPlays.length} orphaned plays. Deleting...`);
-                for (let i = 0; i < orphanedPlays.length; i += 500) {
-                    const chunk = orphanedPlays.slice(i, i + 500);
-                    await prisma.userPlay.deleteMany({ where: { id: { in: chunk.map(r => r.id) } } });
-                }
-            }
-
-            const updateAggs = (pName: string, pTrack: string, pAlbum: string | null, modifier: number) => {
-                const ak = pName.toLowerCase();
-                if (!artistCounts.has(ak)) artistCounts.set(ak, { name: pName, count: 0 });
-                artistCounts.get(ak)!.count += modifier;
-                
-                const tk = `${ak}:::${pTrack.toLowerCase()}`;
-                if (!trackCounts.has(tk)) trackCounts.set(tk, { artistName: pName, trackName: pTrack, count: 0 });
-                trackCounts.get(tk)!.count += modifier;
-                
-                if (pAlbum) {
-                    const alk = `${ak}:::${pAlbum.toLowerCase()}`;
-                    if (!albumCounts.has(alk)) albumCounts.set(alk, { artistName: pName, albumName: pAlbum, count: 0 });
-                    albumCounts.get(alk)!.count += modifier;
-                }
-            };
-            
-            addedPlays.forEach(p => updateAggs(p.artistName, p.trackName, p.albumName, 1));
-            orphanedPlays.forEach(p => updateAggs(p.artistName, p.trackName, p.albumName, -1));
-        }
-
-        // Insert in smaller batches to avoid database timeouts
         for (let i = 0; i < data.length; i += 500) {
             const batch = data.slice(i, i + 500);
             await prisma.userPlay.createMany({ data: batch, skipDuplicates: true });
@@ -260,6 +208,90 @@ async function handleIndexing(job: Job<IndexJobData>) {
         
         const totalTime = Date.now() - startRes;
         console.log(`[Queue] [${username}] Flush complete (${totalTime}ms)`);
+    };
+
+    const diffAndFlushDelta = async (plays: ParsedPlay[]) => {
+        if (plays.length === 0) return;
+        
+        // Deduplicate incoming plays by exact UTS (keep newest)
+        const uniquePlaysMap = new Map<number, ParsedPlay>();
+        for (const p of plays) {
+            if (!uniquePlaysMap.has(p.uts)) {
+                uniquePlaysMap.set(p.uts, p);
+            }
+        }
+        plays = Array.from(uniquePlaysMap.values());
+
+        console.log(`[Queue] [${username}] Pinging DB before delta flush...`);
+        await pingDatabase();
+        
+        const uniqueCombos = new Set<string>();
+        plays.forEach(p => uniqueCombos.add(`${p.artistName}|||${p.trackName}|||${p.albumName || ''}`));
+        const idMap = await IdResolutionService.resolveBatch(Array.from(uniqueCombos), l1Cache);
+        
+        let data = plays.map(p => {
+            const res = idMap.get(`${p.artistName}|||${p.trackName}|||${p.albumName || ''}`)!;
+            return {
+                userId: user.id,
+                artistId: res.artistId,
+                trackId: res.trackId,
+                albumId: res.albumId,
+                artistName: p.artistName,
+                trackName: p.trackName,
+                albumName: p.albumName,
+                timePlayed: new Date(p.uts * 1000)
+            };
+        });
+
+        const minUts = Math.min(...plays.map(p => p.uts));
+        const maxUts = Math.max(...plays.map(p => p.uts));
+        
+        const existingPlays = await prisma.userPlay.findMany({
+            where: { userId: user.id, timePlayed: { gte: new Date(minUts * 1000), lte: new Date(maxUts * 1000) } },
+            select: { id: true, timePlayed: true, artistName: true, trackName: true, albumName: true }
+        });
+        
+        const incomingSet = new Set(data.map(p => `${p.timePlayed.getTime()}|${p.artistName}|${p.trackName}`));
+        const existingSet = new Set(existingPlays.map(p => `${p.timePlayed.getTime()}|${p.artistName}|${p.trackName}`));
+        
+        const addedPlays = data.filter(p => !existingSet.has(`${p.timePlayed.getTime()}|${p.artistName}|${p.trackName}`));
+        const orphanedPlays = existingPlays.filter(p => !incomingSet.has(`${p.timePlayed.getTime()}|${p.artistName}|${p.trackName}`));
+        
+        if (orphanedPlays.length > 0) {
+            console.log(`[Queue] Found ${orphanedPlays.length} orphaned plays. Deleting...`);
+            for (let i = 0; i < orphanedPlays.length; i += 500) {
+                const chunk = orphanedPlays.slice(i, i + 500);
+                await prisma.userPlay.deleteMany({ where: { id: { in: chunk.map(r => r.id) } } });
+            }
+        }
+
+        if (addedPlays.length > 0) {
+            for (let i = 0; i < addedPlays.length; i += 500) {
+                const chunk = addedPlays.slice(i, i + 500);
+                await prisma.userPlay.createMany({ data: chunk, skipDuplicates: true });
+            }
+        }
+
+        const updateAggs = (pName: string, pTrack: string, pAlbum: string | null, modifier: number) => {
+            const ak = pName.toLowerCase();
+            if (!artistCounts.has(ak)) artistCounts.set(ak, { name: pName, count: 0 });
+            artistCounts.get(ak)!.count += modifier;
+            
+            const tk = `${ak}:::${pTrack.toLowerCase()}`;
+            if (!trackCounts.has(tk)) trackCounts.set(tk, { artistName: pName, trackName: pTrack, count: 0 });
+            trackCounts.get(tk)!.count += modifier;
+            
+            if (pAlbum) {
+                const alk = `${ak}:::${pAlbum.toLowerCase()}`;
+                if (!albumCounts.has(alk)) albumCounts.set(alk, { artistName: pName, albumName: pAlbum, count: 0 });
+                albumCounts.get(alk)!.count += modifier;
+            }
+        };
+        
+        addedPlays.forEach(p => updateAggs(p.artistName, p.trackName, p.albumName, 1));
+        orphanedPlays.forEach(p => updateAggs(p.artistName, p.trackName, p.albumName, -1));
+        
+        console.log(`[Queue] Delta diff complete: +${addedPlays.length} -${orphanedPlays.length}`);
     };
 
     const processPage = (tracks: any[]) => {
@@ -306,11 +338,15 @@ async function handleIndexing(job: Job<IndexJobData>) {
             }
         }
 
-        if (p % 5 === 0 || p === totalPages) {
+        if (!isDelta && (p % 5 === 0 || p === totalPages)) {
             console.log(`[Queue] [${username}] Flushing page ${p}/${totalPages} to database...`);
             await withTimeout(flushPlaysToDB(pendingPlays), 120000, `flushPlaysToDB page ${p}`);
             pendingPlays = [];
-        } else {
+        } else if (isDelta && p === totalPages) {
+            console.log(`[Queue] [${username}] Running single delta diff for ${pendingPlays.length} plays...`);
+            await withTimeout(diffAndFlushDelta(pendingPlays), 120000, `diffAndFlushDelta`);
+            pendingPlays = [];
+        } else if (!isDelta) {
             // Log every 2 pages to show it's moving
             if (p % 2 === 0) console.log(`[Queue] [${username}] Syncing page ${p}/${totalPages}...`);
         }
@@ -333,6 +369,7 @@ async function handleIndexing(job: Job<IndexJobData>) {
     CrownService.reconcileUser(user.id).catch(() => {});
     detectDrift(user.id, username, sessionKey, discordId).catch(() => {});
     backfillTrackDurations(user.id, username, sessionKey).catch(() => {});
+    runSmallIndexCorrection(user.id, username, sessionKey).catch(() => {});
 }
 
 async function upsertAggregates(userId: string, artists: Map<string, any>, tracks: Map<string, any>, albums: Map<string, any>, isDelta: boolean, l1Cache: { 
@@ -727,4 +764,67 @@ if (REDIS_URL) {
     });
 
     console.log(`[Queue] Worker initialized and listening for jobs on 'user-index'`);
+}
+
+async function runSmallIndexCorrection(userId: string, username: string, sessionKey: string | null) {
+    try {
+        const user = await prisma.user.findUnique({ where: { id: userId } });
+        if (!user) return;
+        const settings = (user.settings as any) || {};
+        const lastCorrection = settings.lastSmallIndex || 0;
+        const now = Math.floor(Date.now() / 1000);
+        
+        // 10% chance if last correction was > 15 days ago
+        if (now - lastCorrection > 15 * 86400) {
+            if (Math.random() < 0.10) {
+                console.log(`[Queue] Running SmallIndex Correction for ${username}`);
+                settings.lastSmallIndex = now;
+                await prisma.user.update({ where: { id: userId }, data: { settings } });
+                
+                // Fetch top artists (limit 500)
+                const topArtists = await LastFM.getTopArtists(username, 'overall', 500, sessionKey);
+                for (const a of topArtists) {
+                    const count = parseInt(a.playcount || '0', 10);
+                    if (count > 0) {
+                        await prisma.$executeRaw`
+                            UPDATE user_artists 
+                            SET playcount = ${count} 
+                            WHERE user_id = ${userId} AND artist_name = ${a.name} AND playcount != ${count}
+                        `;
+                    }
+                }
+                
+                // Fetch top albums
+                const topAlbums = await LastFM.getTopAlbums(username, 'overall', 500, sessionKey);
+                for (const a of topAlbums) {
+                    const count = parseInt(a.playcount || '0', 10);
+                    const artistName = a.artist?.name || a.artist?.['#text'];
+                    if (count > 0 && artistName) {
+                        await prisma.$executeRaw`
+                            UPDATE user_albums 
+                            SET playcount = ${count} 
+                            WHERE user_id = ${userId} AND artist_name = ${artistName} AND album_name = ${a.name} AND playcount != ${count}
+                        `;
+                    }
+                }
+                
+                // Fetch top tracks
+                const topTracks = await LastFM.getTopTracks(username, 'overall', 500, sessionKey);
+                for (const t of topTracks) {
+                    const count = parseInt(t.playcount || '0', 10);
+                    const artistName = t.artist?.name || t.artist?.['#text'];
+                    if (count > 0 && artistName) {
+                        await prisma.$executeRaw`
+                            UPDATE user_tracks 
+                            SET playcount = ${count} 
+                            WHERE user_id = ${userId} AND artist_name = ${artistName} AND track_name = ${t.name} AND playcount != ${count}
+                        `;
+                    }
+                }
+                console.log(`[Queue] SmallIndex Correction complete for ${username}`);
+            }
+        }
+    } catch (err) {
+        console.error(`[Queue] SmallIndex failed for ${username}:`, err);
+    }
 }
