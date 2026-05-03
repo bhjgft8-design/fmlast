@@ -3,6 +3,7 @@ import { prisma } from '../../database/client';
 import { SlashCommandBuilder, ComponentType, ButtonStyle } from 'discord.js';
 import { ComponentsV2 } from '../../utils/ComponentsV2';
 import { SettingService } from '../../services/bot/SettingService';
+import { triggerDeltaSync } from '../../services/bot/QueueWorker';
 
 export default class MilestoneCommand extends BaseCommand {
     name = 'milestone';
@@ -51,6 +52,9 @@ export default class MilestoneCommand extends BaseCommand {
         }
 
         if (isSlash && !interactionOrMessage.deferred) await interactionOrMessage.deferReply();
+
+        // Fire-and-forget reactive sync
+        triggerDeltaSync(targetDbUser.discordId);
 
         try {
             // 1. Get total scrobbles

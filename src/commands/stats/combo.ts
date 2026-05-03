@@ -7,6 +7,7 @@ import { resolveTargetUser } from '../../utils/userResolver';
 import { Spotify } from '../../services/api/Spotify';
 import { Deezer } from '../../services/api/Deezer';
 import { SettingService } from '../../services/bot/SettingService';
+import { triggerDeltaSync } from '../../services/bot/QueueWorker';
 
 export default class ComboCommand extends BaseCommand {
     name = 'combo';
@@ -44,6 +45,9 @@ export default class ComboCommand extends BaseCommand {
 
         if (isSlash) await interactionOrMessage.deferReply();
         else { try { (interactionOrMessage.channel as TextChannel).sendTyping(); } catch { } }
+
+        // Fire-and-forget reactive sync
+        triggerDeltaSync(userId);
 
         try {
             // We need to fetch recent tracks until the artist changes.

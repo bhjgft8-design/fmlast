@@ -4,6 +4,7 @@ import { SlashCommandBuilder, ComponentType, ButtonStyle } from 'discord.js';
 import { ComponentsV2 } from '../../utils/ComponentsV2';
 import { SettingService } from '../../services/bot/SettingService';
 import { LastFM } from '../../services/api/LastFM';
+import { triggerDeltaSync } from '../../services/bot/QueueWorker';
 
 export default class PaceCommand extends BaseCommand {
     name = 'pace';
@@ -42,6 +43,9 @@ export default class PaceCommand extends BaseCommand {
         const targetDbUser = userSettings.targetUser;
 
         if (isSlash && !interactionOrMessage.deferred) await interactionOrMessage.deferReply();
+
+        // Fire-and-forget reactive sync
+        triggerDeltaSync(targetDbUser.discordId);
 
         try {
             // 1. Get info from Last.fm (for registration date and total playcount)

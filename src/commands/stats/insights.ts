@@ -8,6 +8,7 @@ import { OpenAiService } from '../../services/external/OpenAiService';
 import { parseArgs } from '../../utils/prefixParser';
 import { resolveTargetUser } from '../../utils/userResolver';
 import { StatsService } from '../../services/bot/StatsService';
+import { triggerDeltaSync } from '../../services/bot/QueueWorker';
 
 export default class InsightsCommand extends BaseCommand {
     name = 'insights';
@@ -55,6 +56,9 @@ export default class InsightsCommand extends BaseCommand {
             else await interactionOrMessage.channel.send(msg);
             return;
         }
+
+        // Fire-and-forget reactive sync
+        triggerDeltaSync(userId);
 
         let lfmPeriod = '7day';
         if (isSlash) {
