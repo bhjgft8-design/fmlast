@@ -9,7 +9,7 @@ import { SlashCommandBuilder, TextChannel } from 'discord.js';
 export default class UpdateCommand extends BaseCommand {
     name = 'update';
     description = 'Update your Last.fm index with your latest scrobbles';
-    aliases = ['u', 'refresh', 'index'];
+    aliases = ['up', 'refresh', 'index'];
 
     slashData = new SlashCommandBuilder()
         .setName('update')
