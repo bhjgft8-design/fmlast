@@ -1,5 +1,6 @@
 import { prisma } from '../../database/client';
 import { TrackResolverService } from '../api/TrackResolverService';
+import { CacheService } from '../bot/CacheService';
 
 export enum AlbumRarity {
     COMMON = 'COMMON',
@@ -141,5 +142,238 @@ export class AlbumGameService {
             case AlbumRarity.RARE:      return 0x0070DD; // Blue
             default:                    return 0xFFFFFF; // White
         }
+    }
+
+    /**
+     * RPG: Gets or creates a user's game profile.
+     */
+    static async getGameProfile(discordId: string) {
+        const user = await prisma.user.findUnique({ 
+            where: { discordId },
+            include: { gameProfile: true }
+        });
+        if (!user) return null;
+
+        if (!user.gameProfile) {
+            return await prisma.userGameProfile.create({
+                data: { userId: user.id }
+            });
+        }
+        return user.gameProfile;
+    }
+
+    /**
+     * RPG: Calculates scrap value based on rarity.
+     */
+    static getScrapValue(rarity: AlbumRarity): number {
+        switch (rarity) {
+            case AlbumRarity.LEGENDARY: return 500;
+            case AlbumRarity.EPIC:      return 100;
+            case AlbumRarity.RARE:      return 25;
+            default:                    return 5;
+        }
+    }
+
+    /**
+     * RPG: Checks if an album is already owned.
+     */
+    static async isOwned(discordId: string, albumId: string): Promise<boolean> {
+        const user = await prisma.user.findUnique({ where: { discordId } });
+        if (!user) return false;
+
+        const collection = await prisma.userAlbumCollection.findUnique({
+            where: { userId_albumId: { userId: user.id, albumId } }
+        });
+        return !!collection;
+    }
+
+    /**
+     * RPG: Updates user wishlist.
+     */
+    static async updateWishlist(discordId: string, albumId: string, action: 'add' | 'remove'): Promise<boolean> {
+        const profile = await this.getGameProfile(discordId);
+        if (!profile) return false;
+
+        let newWishlist = [...profile.wishlist];
+        if (action === 'add') {
+            if (newWishlist.length >= 5) return false;
+            if (!newWishlist.includes(albumId)) newWishlist.push(albumId);
+        } else {
+            newWishlist = newWishlist.filter(id => id !== albumId);
+        }
+
+        await prisma.userGameProfile.update({
+            where: { userId: profile.userId },
+            data: { wishlist: newWishlist }
+        });
+        return true;
+    }
+
+    /**
+     * RPG: Check if anyone has this album on their wishlist.
+     */
+    static async getWishers(albumId: string): Promise<string[]> {
+        const profiles = await prisma.userGameProfile.findMany({
+            where: { wishlist: { has: albumId } },
+            include: { user: true }
+        });
+        return profiles.map(p => p.user.discordId);
+    }
+
+    /**
+     * RPG: Award Vinyls to user.
+     */
+    static async awardVinyls(discordId: string, amount: number) {
+        const profile = await this.getGameProfile(discordId);
+        if (!profile) return;
+
+        await prisma.userGameProfile.update({
+            where: { userId: profile.userId },
+            data: { vinylScraps: { increment: amount } }
+        });
+    }
+
+    /**
+     * RPG: Caches a proxied image URL.
+     */
+    static async cacheProxyUrl(originalUrl: string, proxiedUrl: string) {
+        const key = `market:proxy:${Buffer.from(originalUrl).toString('base64')}`;
+        await CacheService.set(key, proxiedUrl, 21600); // 6 hours
+    }
+
+    /**
+     * RPG: Gets a cached proxied image URL.
+     */
+    static async getCachedProxyUrl(originalUrl: string): Promise<string | null> {
+        const key = `market:proxy:${Buffer.from(originalUrl).toString('base64')}`;
+        return await CacheService.get<string>(key);
+    }
+
+    /**
+     * RPG: Refreshes the global market with new stock.
+     */
+    static async refreshMarket() {
+        // Clear old items
+        await prisma.marketItem.deleteMany({});
+
+        // Pick 10 random albums with weighted rarity
+        const items = [];
+        for (let i = 0; i < 10; i++) {
+            const album = await this.pickRandomAlbum();
+            if (!album) continue;
+
+            const roll = Math.random() * 100;
+            let rarity = AlbumRarity.COMMON;
+            let price = 25;
+
+            if (roll < 2) {
+                rarity = AlbumRarity.LEGENDARY;
+                price = 1500;
+            } else if (roll < 10) {
+                rarity = AlbumRarity.EPIC;
+                price = 400;
+            } else if (roll < 40) {
+                rarity = AlbumRarity.RARE;
+                price = 100;
+            }
+
+            items.push({ albumId: album.id, rarity, price });
+        }
+
+        const expiresAt = new Date(Date.now() + 6 * 60 * 60 * 1000); // 6 hours
+        
+        for (const item of items) {
+            await prisma.marketItem.create({
+                data: { ...item, expiresAt }
+            });
+        }
+    }
+
+    private static async pickRandomAlbum() {
+        const albums = await prisma.$queryRaw<any[]>`SELECT id FROM albums ORDER BY RANDOM() LIMIT 1`;
+        return albums[0] || null;
+    }
+
+    static async getMarketItems() {
+        return await prisma.marketItem.findMany({
+            include: { album: { include: { artist: true } } }
+        });
+    }
+
+    /**
+     * RPG: Purchase an album from the market.
+     */
+    static async buyFromMarket(discordId: string, marketId: string): Promise<{ success: boolean; msg: string }> {
+        const profile = await this.getGameProfile(discordId);
+        if (!profile) return { success: false, msg: 'Profile not found.' };
+
+        const item = await prisma.marketItem.findUnique({
+            where: { id: marketId },
+            include: { album: { include: { artist: true } } }
+        });
+        if (!item) return { success: false, msg: 'Item no longer in market.' };
+
+        if (profile.vinylScraps < item.price) {
+            return { success: false, msg: `You need **${item.price}** Vinyls! (You have ${profile.vinylScraps})` };
+        }
+
+        // Check if already owned
+        const owned = await this.isOwned(discordId, item.albumId);
+        if (owned) return { success: false, msg: 'You already own this album!' };
+
+        // Transaction
+        await prisma.$transaction([
+            prisma.userGameProfile.update({
+                where: { userId: profile.userId },
+                data: { vinylScraps: { decrement: item.price } }
+            }),
+            prisma.userAlbumCollection.create({
+                data: {
+                    userId: profile.userId,
+                    albumId: item.albumId,
+                    rarity: item.rarity
+                }
+            }),
+            prisma.marketItem.delete({ where: { id: marketId } }) // Remove from global market
+        ]);
+
+        return { success: true, msg: `Successfully bought **${item.album.artist.name} - ${item.album.name}**!` };
+    }
+
+    /**
+     * RPG: Claims daily reward.
+     */
+    static async claimDaily(discordId: string): Promise<{ success: boolean; scraps?: number; cooldown?: number }> {
+        const profile = await this.getGameProfile(discordId);
+        if (!profile) return { success: false };
+
+        const now = new Date();
+        const lastDaily = profile.lastDaily;
+        const COOLDOWN = 6 * 60 * 60 * 1000;
+
+        if (lastDaily && (now.getTime() - lastDaily.getTime() < COOLDOWN)) {
+            return { success: false, cooldown: COOLDOWN - (now.getTime() - lastDaily.getTime()) };
+        }
+
+        const Vinyls = Math.floor(Math.random() * (150 - 50 + 1)) + 50;
+        await prisma.$transaction([
+            prisma.userGameProfile.update({
+                where: { userId: profile.userId },
+                data: { 
+                    vinylScraps: { increment: Vinyls },
+                    lastDaily: now
+                }
+            }),
+            prisma.user.update({
+                where: { discordId },
+                data: { 
+                    albumRolls: 0, // Reset roll quota
+                    lastAlbumRoll: null 
+                }
+            })
+        ]);
+
+        return { success: true, scraps: Vinyls };
+
     }
 }

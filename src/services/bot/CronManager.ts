@@ -28,7 +28,8 @@ type CronJobName =
     | 'backfill-track-durations'
     | 'lastfm-health-check'
     | 'drift-detection-sweep'
-    | 'enrich-global-metadata';
+    | 'enrich-global-metadata'
+    | 'market-refresh';
 
 interface CronJobData {
     name: CronJobName;
@@ -89,6 +90,13 @@ export class CronManager {
             removeOnFail: true,
         });
 
+        // 6. Market refresh — every 6 hours
+        await cronQueue.add('market-refresh', { name: 'market-refresh' }, {
+            repeat: { pattern: '0 */6 * * *' },
+            removeOnComplete: true,
+            removeOnFail: true,
+        });
+
         // ── Worker to Process Cron Jobs ─────────────────────────────────
 
         cronWorker = new Worker('cron-jobs', async (job: Job<CronJobData>) => {
@@ -107,6 +115,9 @@ export class CronManager {
                     break;
                 case 'enrich-global-metadata':
                     await handleGlobalMetadataEnrichment();
+                    break;
+                case 'market-refresh':
+                    await handleMarketRefresh();
                     break;
             }
         }, { connection, concurrency: 1 });
@@ -305,4 +316,13 @@ async function handleGlobalMetadataEnrichment(): Promise<void> {
         }
         await new Promise(r => setTimeout(r, 1100));
     }
+}
+
+/**
+ * Rotates the global album market stock.
+ */
+async function handleMarketRefresh(): Promise<void> {
+    const { AlbumGameService } = await import('./AlbumGameService');
+    await AlbumGameService.refreshMarket();
+    LoggerService.info('Global Market has been refreshed.', 'CronManager');
 }

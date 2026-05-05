@@ -120,7 +120,7 @@ export class LastFM {
             }
         }
 
-        throw new Error('Request failed and no session key available for fallback');
+        throw new Error(knownPrivate ? 'This Last.fm profile is private and no session key is available to access it.' : 'Last.fm request failed.');
     }
 
     /** Step 1: Get request token */
@@ -250,6 +250,20 @@ export class LastFM {
             const data = await this.request('user.getTopAlbums', username, { period, limit: String(limit) }, sessionKey);
             return data.topalbums?.album as any[] || [];
         });
+    }
+
+    /** Search for an album by generic text query */
+    static async searchAlbum(albumName: string): Promise<{ artist: string, album: string } | null> {
+        try {
+            const data = await this.request('album.search', '', { album: albumName, limit: '1' });
+            const matches = data.results?.albummatches?.album;
+            if (!matches) return null;
+            const bestMatch = Array.isArray(matches) ? matches[0] : matches;
+            if (!bestMatch || !bestMatch.name || !bestMatch.artist) return null;
+            return { artist: bestMatch.artist, album: bestMatch.name };
+        } catch {
+            return null;
+        }
     }
 
     /** Get top tracks */

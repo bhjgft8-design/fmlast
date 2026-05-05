@@ -121,6 +121,41 @@ export class Spotify {
         }
     }
 
+    /** Search for an album by generic text query (smart fallback) */
+    static async searchAlbum(query: string): Promise<{ artist: string, album: string } | null> {
+        if (this.isDisabled()) return null;
+        try {
+            const token = await this.getToken();
+            
+            // Search for both album and track to catch cases where user searches for a song name
+            const { data } = await axios.get('https://api.spotify.com/v1/search', {
+                headers: { Authorization: `Bearer ${token}` },
+                params: {
+                    q: query,
+                    type: 'album,track',
+                    limit: 1,
+                },
+            });
+
+            // If an album matched directly, use it
+            const matchedAlbum = data.albums?.items?.[0];
+            if (matchedAlbum) {
+                return { artist: matchedAlbum.artists[0].name, album: matchedAlbum.name };
+            }
+
+            // If a track matched, return the album it belongs to
+            const matchedTrack = data.tracks?.items?.[0];
+            if (matchedTrack) {
+                return { artist: matchedTrack.album.artists[0].name, album: matchedTrack.album.name };
+            }
+
+            return null;
+        } catch (e) {
+            this.handleApiError(e);
+            return null;
+        }
+    }
+
     /** Get best cover with caching */
     static async getTrackCover(trackName: string, artistName: string): Promise<string | null> {
         if (this.isDisabled()) return null;

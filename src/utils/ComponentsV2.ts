@@ -5,7 +5,7 @@ import { ComponentType, ButtonStyle, MessageFlags } from 'discord.js';
  * Provides a clean interface for creating 'Message Accessory' containers (cards).
  */
 export class ComponentsV2 {
-    private payload: any = {
+    public payload: any = {
         type: ComponentType.Container,
         spoiler: false,
         components: []
@@ -86,7 +86,8 @@ export class ComponentsV2 {
     /** 
      * Add a small thumbnail (Type 11) to the right of text content
      */
-    addThumbnail(url: string, content?: string): this {
+    addThumbnail(url: string | null | undefined, content?: string): this {
+        if (!url) return this;
         if (content) {
             this.payload.components.push({
                 type: ComponentType.Section,
