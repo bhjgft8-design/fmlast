@@ -2,7 +2,7 @@ FROM node:22-slim
 
 # Install system dependencies for Chrome, FFmpeg, and Slskd/Supervisor
 RUN apt-get update \
-    && apt-get install -y wget gnupg supervisor curl ca-certificates \
+    && apt-get install -y wget gnupg supervisor curl ca-certificates libicu-dev libssl-dev \
     && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/googlechrome-linux-keyring.gpg \
     && sh -c 'echo "deb [arch=amd64 signed-by=/usr/share/keyrings/googlechrome-linux-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list' \
     && apt-get update \
@@ -10,9 +10,9 @@ RUN apt-get update \
       --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
-# Install slskd
-RUN wget -q https://github.com/slskd/slskd/releases/latest/download/slskd-linux-x64 \
-    -O /usr/local/bin/slskd && chmod +x /usr/local/bin/slskd
+# Install slskd (Pinned version for reliability)
+RUN curl -fsSL https://github.com/slskd/slskd/releases/download/0.21.4/slskd-linux-x64 \
+    -o /usr/local/bin/slskd && chmod +x /usr/local/bin/slskd
 
 # Set up working directory
 WORKDIR /usr/src/app
