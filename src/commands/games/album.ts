@@ -632,13 +632,14 @@ export default class AlbumCommand extends BaseCommand {
                 if (proxiedImage) await AlbumGameService.cacheProxyUrl(resolved.artworkUrl, proxiedImage);
             }
 
-            const builder = new ComponentsV2()
-                .setAccent(color)
-                .addText(`### 🏪 GLOBAL MARKET (#${idx + 1}/${items.length})\n`)
-                .addText(`${rarityEmoji} **${item.album.artist.name}** — **${item.album.name}**\n`)
-                .addText(`Price: **${item.price}** 💿  |  Balance: **${profile?.vinylScraps || 0}** 💿\n`)
-                .addText(`\n-# ⏳ Refreshes in **${timeStr}**`)
-                .setImage(proxiedImage || resolved.artworkUrl || 'https://lastfm.freetls.fastly.net/i/u/300x300/2a96cbd8b46e442fc41c2b86b821562f.png');
+                const fallbackImage = item.album.imageLarge || 'https://lastfm.freetls.fastly.net/i/u/300x300/2a96cbd8b46e442fc41c2b86b821562f.png';
+                const builder = new ComponentsV2()
+                    .setAccent(color)
+                    .addText(`### 🏪 GLOBAL MARKET (#${idx + 1}/${items.length})\n`)
+                    .addText(`${rarityEmoji} **${item.album.artist.name}** — **${item.album.name}**\n`)
+                    .addText(`Price: **${item.price}** 💿  |  Balance: **${profile?.vinylScraps || 0}** 💿\n`)
+                    .addText(`\n-# ⏳ Refreshes in **${timeStr}**`)
+                    .setImage(proxiedImage || resolved.artworkUrl || fallbackImage);
 
             const navRow: any[] = [];
             if (idx > 0) navRow.push({

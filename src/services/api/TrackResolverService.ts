@@ -1,7 +1,9 @@
 import { Spotify } from './Spotify';
 import { AppleMusic } from './AppleMusic';
 import { Deezer } from './Deezer';
+import { LastFM } from './LastFM';
 import { CacheService } from '../bot/CacheService';
+import { TitleCleaner } from '../../utils/title';
 import { LoggerService } from '../bot/LoggerService';
 
 export interface ResolvedTrack {
@@ -52,11 +54,12 @@ export class TrackResolverService {
         }
 
         // 2. Parallel API Fetch
-        const [sp, am, dz, yt] = await Promise.all([
+        const [sp, am, dz, yt, lfm] = await Promise.all([
             Spotify.getTrackInfo(trackName, artistName).catch(() => null),
             AppleMusic.searchTrack(artistName, trackName).catch(() => null),
             Deezer.searchTrack(artistName, trackName).catch(() => null),
-            this.getYoutubeLink(artistName, trackName).catch(() => null)
+            this.getYoutubeLink(artistName, trackName).catch(() => null),
+            LastFM.getTrackInfo(artistName, trackName).catch(() => null)
         ]);
 
         // 3. Resolve Artist Avatar
@@ -120,8 +123,12 @@ export class TrackResolverService {
         const album = (isSpValid ? sp?.albumName : (isAmValid ? am?.albumName : (isDzValid ? dz?.album : null))) || albumHint || null;
         
         // Artwork logic
+        const lfmImage = lfm?.album?.image?.find((img: any) => img.size === 'extralarge')?.['#text']
+            || lfm?.album?.image?.find((img: any) => img.size === 'large')?.['#text'];
+        const isLfmValid = lfmImage && !LastFM.isDefaultImage(lfmImage);
+
         let artworkUrl = cachedAlbumCover 
-            || ((isSpValid && sp?.coverUrl) ? sp.coverUrl : (isAmValid && am?.artworkUrl ? am.artworkUrl.replace('{w}x{h}', '1000x1000') : (isDzValid ? dz?.artworkUrl : null)));
+            || ((isSpValid && sp?.coverUrl) ? sp.coverUrl : (isAmValid && am?.artworkUrl ? am.artworkUrl.replace('{w}x{h}', '1000x1000') : (isDzValid ? dz?.artworkUrl : (isLfmValid ? lfmImage : null))));
 
         if (!isSpValid && !isAmValid && !isDzValid) {
             console.warn(`[UTR] Match failed for: ${query}. SP:${!!sp?.resolvedTrack} AM:${!!am?.trackName} DZ:${!!dz?.name}`);
@@ -174,7 +181,7 @@ export class TrackResolverService {
         const [dzAvatar, spAvatar, lfmTags] = await Promise.all([
             Deezer.getArtistCover(artistName).catch(() => null),
             Spotify.getArtistCover(artistName).catch(() => null),
-            import('./LastFM').then(m => m.LastFM.getArtistTopTags(artistName)).catch(() => [])
+            LastFM.getArtistTopTags(artistName).catch(() => [])
         ]);
 
         const result = {
@@ -202,8 +209,7 @@ export class TrackResolverService {
         source: string 
     }> {
         const query = `album:${artistName} - ${albumName}`.toLowerCase().trim();
-        // v11: bumped to flush incorrect results
-        const cacheKey = `utr:album:v12:${Buffer.from(query).toString('base64')}`;
+        const cacheKey = `utr:album:v13:${Buffer.from(query).toString('base64')}`;
 
         const cached = await CacheService.get<any>(cacheKey);
         if (cached) {
@@ -211,38 +217,52 @@ export class TrackResolverService {
             return cached;
         }
 
-        const [sp, am, dz] = await Promise.all([
-            Spotify.getAlbumMetadata(albumName, artistName).catch(() => null),
-            AppleMusic.getAlbumMetadata(albumName, artistName).catch(() => null),
-            Deezer.getAlbumMetadata(albumName, artistName).catch(() => null)
-        ]);
+        const resolve = async (aName: string, albName: string) => {
+            const [sp, am, dz, lfm] = await Promise.all([
+                Spotify.getAlbumMetadata(albName, aName).catch(() => null),
+                AppleMusic.getAlbumMetadata(albName, aName).catch(() => null),
+                Deezer.getAlbumMetadata(albName, aName).catch(() => null),
+                LastFM.getAlbumInfo(aName, albName).catch(() => null)
+            ]);
 
-        // Strict validation: only accept cover if the album name is a real match
-        const clean = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
-        const qAlbum = clean(albumName);
-        const isSpValid = sp?.coverUrl && qAlbum.length > 0;  // Spotify already validates internally
-        const isAmValid = am?.coverUrl && qAlbum.length > 0;  // Apple Music already validates internally
-        const isDzValid = dz?.coverUrl && qAlbum.length > 0;  // Deezer already validates internally
+            const lfmImage = lfm?.image?.find((img: any) => img.size === 'extralarge')?.['#text']
+                || lfm?.image?.find((img: any) => img.size === 'large')?.['#text'];
+            const isLfmValid = lfmImage && !LastFM.isDefaultImage(lfmImage);
 
-        // Prioritize Spotify for artwork, then Apple Music, then Deezer
-        const artworkUrl = (isSpValid ? sp!.coverUrl : null) 
-            || (isAmValid ? am!.coverUrl : null) 
-            || (isDzValid ? dz!.coverUrl : null) 
-            || null;
+            const artworkUrl = (sp?.coverUrl) 
+                || (am?.coverUrl) 
+                || (dz?.coverUrl) 
+                || (isLfmValid ? lfmImage : null);
 
-        const result = {
+            return { artworkUrl, sp, am, dz, lfm, isLfmValid };
+        };
+
+        // 1. Try with original name
+        let result = await resolve(artistName, albumName);
+
+        // 2. If no artwork, try with cleaned name
+        if (!result.artworkUrl) {
+            const cleanedName = TitleCleaner.cleanAlbumName(albumName);
+            if (cleanedName !== albumName) {
+                console.log(`[UTR] Retrying resolution with cleaned name: ${cleanedName}`);
+                result = await resolve(artistName, cleanedName);
+            }
+        }
+
+        const { artworkUrl, sp, am, dz, lfm, isLfmValid } = result;
+
+        const finalResult = {
             artist: artistName,
             album: albumName,
             artworkUrl,
             releaseYear: sp?.releaseYear || am?.releaseYear || dz?.releaseYear || null,
             albumType: sp?.albumType || am?.albumType || dz?.albumType || null,
             isExplicit: dz?.isExplicit || false,
-            source: isSpValid ? 'Spotify' : (isAmValid ? 'Apple Music' : (isDzValid ? 'Deezer' : 'Last.fm'))
+            source: sp?.coverUrl ? 'Spotify' : (am?.coverUrl ? 'Apple Music' : (dz?.coverUrl ? 'Deezer' : (isLfmValid ? 'Last.fm' : 'None')))
         };
 
-        await CacheService.set(cacheKey, result, this.CACHE_TTL);
-
-        return result;
+        await CacheService.set(cacheKey, finalResult, this.CACHE_TTL);
+        return finalResult;
     }
 
     private static isValidMatch(resTitle: string, resArtist: string, qTrack: string, qArtist: string): boolean {
