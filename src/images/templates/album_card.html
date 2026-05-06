@@ -35,12 +35,11 @@
             position: relative;
         }
 
-        /* ── Album art ── */
         .album-face {
             position: absolute;
             inset: 0;
             border-radius: 6px;
-            overflow: hidden;
+            isolation: isolate;
             box-shadow:
                 0 0 0 1px rgba(0,0,0,0.9),
                 0 50px 120px rgba(0,0,0,0.95);
@@ -51,6 +50,7 @@
             height: 100%;
             object-fit: cover;
             display: block;
+            border-radius: 6px;
         }
 
         /* ── Plastic cello film ── */
@@ -294,9 +294,106 @@
             margin-top: 6px;
             text-shadow: 0 2px 10px rgba(0,0,0,0.5);
         }
+
+        /* ── Variants ── */
+        .variant-ERROR img.album-art {
+            filter: invert(1) hue-rotate(90deg) contrast(1.5);
+        }
+
+        .variant-HOLOGRAPHIC::after {
+            content: '';
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(
+                125deg,
+                rgba(255, 0, 0, 0.4) 0%,
+                rgba(255, 154, 0, 0.4) 10%,
+                rgba(208, 222, 33, 0.4) 20%,
+                rgba(79, 220, 74, 0.4) 30%,
+                rgba(63, 218, 216, 0.4) 40%,
+                rgba(47, 201, 226, 0.4) 50%,
+                rgba(28, 127, 238, 0.4) 60%,
+                rgba(95, 21, 242, 0.4) 70%,
+                rgba(186, 12, 248, 0.4) 80%,
+                rgba(251, 7, 217, 0.4) 90%,
+                rgba(255, 0, 0, 0.4) 100%
+            );
+            mix-blend-mode: color-dodge;
+            z-index: 5;
+            pointer-events: none;
+        }
+
+        /* ── Polish Levels (Static Foil FX) ── */
+        
+        /* 🥇 GOLD (Level 1) - Shattered Gold Foil */
+        body.polish-1 .cat-album {
+            background: linear-gradient(135deg, #FFDF00 20%, #FFF8DC 40%, #B8860B 60%, #FFDF00 80%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: 0 0 10px rgba(255,215,0,0.6);
+        }
+        body.polish-1 .album-face::before {
+            content: ''; position: absolute; inset: -8px;
+            background: repeating-linear-gradient(45deg, #FFDF00 0%, #B8860B 10%, #FFDF00 20%);
+            z-index: -1; border-radius: 8px; box-shadow: 0 0 20px rgba(255,215,0,0.5);
+        }
+        body.polish-1 .album-face::after {
+            content: ''; position: absolute; inset: 0;
+            background-image: 
+                linear-gradient(135deg, rgba(255,255,255,0) 30%, rgba(255,255,255,0.4) 45%, rgba(255,255,255,0) 60%),
+                repeating-linear-gradient(115deg, rgba(255,215,0,0.15) 0px, rgba(218,165,32,0.15) 15px, rgba(255,215,0,0.15) 30px);
+            mix-blend-mode: overlay; z-index: 5; pointer-events: none;
+        }
+
+        /* 💎 DIAMOND (Level 2) - Prismatic Ice Foil */
+        body.polish-2 .cat-album {
+            background: linear-gradient(135deg, #E0FFFF 20%, #FFFFFF 40%, #00FFFF 60%, #E0FFFF 80%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: 0 0 15px rgba(0,255,255,0.7);
+        }
+        body.polish-2 .album-face::before {
+            content: ''; position: absolute; inset: -10px;
+            background: repeating-linear-gradient(45deg, #00FFFF 0%, #FFFFFF 10%, #4682B4 20%, #00FFFF 30%);
+            z-index: -1; border-radius: 10px; box-shadow: 0 0 25px rgba(0,255,255,0.6);
+        }
+        body.polish-2 .album-face::after {
+            content: ''; position: absolute; inset: 0;
+            background-image: 
+                radial-gradient(circle at 30% 30%, rgba(255,255,255,0.4) 0%, transparent 10%),
+                radial-gradient(circle at 70% 70%, rgba(255,255,255,0.4) 0%, transparent 10%),
+                linear-gradient(105deg, transparent 20%, rgba(255,255,255,0.5) 35%, rgba(0,255,255,0.2) 50%, transparent 65%),
+                repeating-linear-gradient(45deg, rgba(0,255,255,0.1) 0px, rgba(255,255,255,0.1) 5px, rgba(0,255,255,0.1) 10px);
+            mix-blend-mode: color-dodge; z-index: 5; pointer-events: none;
+        }
+
+        /* 🌈 RAINBOW (Level 3) - Secret Rare Full Art */
+        body.polish-3 .cat-album {
+            background: linear-gradient(to right, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000);
+            background-size: 200% auto;
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            text-shadow: 0 0 15px rgba(255,255,255,0.6);
+        }
+        body.polish-3 .album-face::before {
+            content: ''; position: absolute; inset: -12px;
+            background: conic-gradient(from 45deg, #ff0000, #ffff00, #00ff00, #00ffff, #0000ff, #ff00ff, #ff0000);
+            z-index: -1; border-radius: 12px; box-shadow: 0 0 35px rgba(255,255,255,0.5);
+        }
+        body.polish-3 .album-face::after {
+            content: ''; position: absolute; inset: 0;
+            background-image: 
+                linear-gradient(125deg, rgba(255,0,0,0.15) 0%, rgba(255,255,0,0.15) 20%, rgba(0,255,0,0.15) 40%, rgba(0,255,255,0.15) 60%, rgba(0,0,255,0.15) 80%, rgba(255,0,255,0.15) 100%),
+                repeating-linear-gradient(45deg, rgba(255,255,255,0.08) 0px, rgba(255,255,255,0) 10px, rgba(255,255,255,0.08) 20px),
+                radial-gradient(circle at 20% 80%, rgba(255,255,255,0.6) 0%, transparent 8%),
+                radial-gradient(circle at 80% 20%, rgba(255,255,255,0.6) 0%, transparent 8%);
+            mix-blend-mode: color-dodge; z-index: 5; pointer-events: none;
+        }
+
+        /* ── Polish Levels (Static Foil FX) ── */
     </style>
 </head>
-<body style="--rarity-color: {{rarityColor}};">
+<body class="polish-{{polishLevel}}" style="--rarity-color: {{rarityColor}};">
 
     <div class="bg-glow"></div>
 

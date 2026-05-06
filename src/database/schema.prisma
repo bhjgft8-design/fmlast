@@ -27,6 +27,7 @@ model User {
   guilds             GuildMember[]
   importJobs         ImportJob[]
   albumCollection    UserAlbumCollection[]
+  artistCollection   UserArtistCollection[]
   userAlbums         UserAlbum[]
   userArtists        UserArtist[]
   gameProfile        UserGameProfile?
@@ -80,6 +81,7 @@ model Artist {
   crowns         Crown[]
   tracks         Track[]
   userAlbums     UserAlbum[]
+  collectedBy    UserArtistCollection[]
   userArtists    UserArtist[]
   userPlays      UserPlay[]
   userTracks     UserTrack[]
@@ -140,10 +142,12 @@ model UserAlbumCollection {
   id        String   @id @default(cuid())
   userId    String   @map("user_id")
   albumId   String   @map("album_id")
-  rarity    String   @default("COMMON")
-  claimedAt DateTime @default(now()) @map("claimed_at")
-  masteryXp Int      @default(0) @map("mastery_xp")
-  album     Album    @relation(fields: [albumId], references: [id], onDelete: Cascade)
+  rarity      String   @default("COMMON")
+  variant     String   @default("NORMAL")
+  polishLevel Int      @default(0) @map("polish_level")
+  claimedAt   DateTime @default(now()) @map("claimed_at")
+  masteryXp   Int      @default(0) @map("mastery_xp")
+  album       Album    @relation(fields: [albumId], references: [id], onDelete: Cascade)
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, albumId])
@@ -151,13 +155,32 @@ model UserAlbumCollection {
 }
 
 model UserGameProfile {
-  userId      String    @id @map("user_id")
-  vinylScraps Int       @default(0) @map("vinyl_scraps")
-  wishlist    String[]  @default([])
-  lastDaily   DateTime? @map("last_daily")
-  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId          String    @id @map("user_id")
+  vinylScraps     Int       @default(0) @map("vinyl_scraps")
+  wishlist        String[]  @default([])
+  lastDaily       DateTime? @map("last_daily")
+  collectionValue Int       @default(0) @map("collection_value")
+  quests          Json?
+  questDate       DateTime? @map("quest_date")
+  badges          String[]  @default([])
+  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@map("user_game_profiles")
+}
+
+model UserArtistCollection {
+  id          String   @id @default(cuid())
+  userId      String   @map("user_id")
+  artistId    String   @map("artist_id")
+  rarity      String   @default("COMMON")
+  variant     String   @default("NORMAL")
+  polishLevel Int      @default(0) @map("polish_level")
+  claimedAt   DateTime @default(now()) @map("claimed_at")
+  artist      Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, artistId])
+  @@map("user_artist_collections")
 }
 
 model MarketItem {

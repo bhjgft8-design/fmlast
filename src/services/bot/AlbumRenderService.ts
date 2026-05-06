@@ -8,9 +8,11 @@ export class AlbumRenderService {
      */
     static async renderAlbumCard(data: {
         artistName: string;
-        albumName: string;
+        albumName?: string;
         image: string;
         rarity: AlbumRarity;
+        variant?: string;
+        polishLevel?: number;
     }): Promise<Buffer> {
         const barcodeBars = Array.from({ length: 40 }, () =>
             Math.floor(Math.random() * 16) + 8
@@ -28,6 +30,20 @@ export class AlbumRenderService {
             rarityIcon: this.getRarityIcon(data.rarity),
             artistImage: artistImage || null,
             barcodeBars,
+            variant: data.variant || 'NORMAL',
+            polishLevel: data.polishLevel || 0,
+        }, { width: 1080, height: 1080 });
+    }
+
+    /**
+     * Renders a standalone album variant (full art with effects).
+     */
+    static async renderVariant(data: {
+        image: string;
+        variant: string;
+    }): Promise<Buffer> {
+        return await PuppeteerService.render('album_variant', {
+            ...data,
         }, { width: 1080, height: 1080 });
     }
 

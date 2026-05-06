@@ -10,7 +10,7 @@ import {
     ChannelType
 } from "discord.js";
 import { ComponentsV2 } from '../../utils/ComponentsV2';
-import { AlbumGameService, AlbumRarity } from '../../services/bot/AlbumGameService';
+import { AlbumGameService, AlbumRarity, GameRoll } from '../../services/bot/AlbumGameService';
 import { TrackResolverService } from '../../services/api/TrackResolverService';
 import { Spotify } from '../../services/api/Spotify';
 import { LastFM } from '../../services/api/LastFM';
@@ -58,6 +58,23 @@ export default class AlbumCommand extends BaseCommand {
             sub.setName('balance')
                 .setDescription('Check your Vinyls balance')
                 .addUserOption(opt => opt.setName('user').setDescription('User to check balance of'))
+        )
+        .addSubcommand(sub =>
+            sub.setName('polish')
+                .setDescription('Upgrade an item in your collection to Gold, Diamond, or Rainbow')
+                .addStringOption(opt => opt.setName('query').setDescription('Artist - Album or Artist name').setRequired(false))
+        )
+        .addSubcommand(sub =>
+            sub.setName('top')
+                .setDescription('View the Collection Value leaderboard')
+        )
+        .addSubcommand(sub =>
+            sub.setName('quests')
+                .setDescription('View and claim daily album quests')
+        )
+        .addSubcommand(sub =>
+            sub.setName('store')
+                .setDescription('Buy specialized booster packs with guaranteed effects')
         );
 
     async execute(interactionOrMessage: any, isSlash = false, args?: string[]): Promise<void> {
@@ -79,6 +96,14 @@ export default class AlbumCommand extends BaseCommand {
             await this.handleDaily(interactionOrMessage, isSlash, userId, channel);
         } else if (subcommand === 'balance' || subcommand === 'b' || subcommand === 'bal') {
             await this.handleBalance(interactionOrMessage, isSlash, userId, channel);
+        } else if (subcommand === 'polish') {
+            await this.handlePolish(interactionOrMessage, isSlash, userId, channel, args);
+        } else if (subcommand === 'top' || subcommand === 'leaderboard') {
+            await this.handleLeaderboard(interactionOrMessage, isSlash, userId, channel);
+        } else if (subcommand === 'quests' || subcommand === 'q') {
+            await this.handleQuests(interactionOrMessage, isSlash, userId, channel);
+        } else if (subcommand === 'store' || subcommand === 's' || subcommand === 'packs') {
+            await this.handleStore(interactionOrMessage, isSlash, userId, channel);
         }
     }
 
@@ -115,10 +140,10 @@ export default class AlbumCommand extends BaseCommand {
                 return;
             }
 
-            // 2. Roll for Album
-            const roll = await AlbumGameService.rollAlbum(discordId);
+            // 2. Roll for Item
+            const roll = await AlbumGameService.rollItem(discordId);
             if (!roll) {
-                const msg = '😢 No albums found in the pool. Try again later.';
+                const msg = '😢 No items found in the pool. Try again later.';
                 isSlash ? await interactionOrMessage.editReply(msg) : await channel.send(msg);
                 return;
             }
@@ -129,7 +154,7 @@ export default class AlbumCommand extends BaseCommand {
                 where: { discordId },
                 data: {
                     albumRolls: newRolls,
-                    lastAlbumRoll: newRolls >= MAX_ROLLS ? new Date() : dbUser.lastAlbumRoll
+                    lastAlbumRoll: newRolls >= MAX_ROLLS ? new Date() : (rolls === 0 ? null : dbUser.lastAlbumRoll)
                 }
             });
 
@@ -137,29 +162,66 @@ export default class AlbumCommand extends BaseCommand {
             const proxiedImage = await this.proxyImage(roll.image, interactionOrMessage.client);
 
             // RPG: Check for duplicates
-            const isOwned = await AlbumGameService.isOwned(discordId, roll.albumId);
+            const isOwned = await AlbumGameService.isOwned(discordId, roll.type, roll.itemId);
             const scrapValue = AlbumGameService.getScrapValue(roll.rarity);
 
             // RPG: Check for wishlists
-            const wishers = await AlbumGameService.getWishers(roll.albumId);
+            const wishers = await AlbumGameService.getWishers(roll.itemId);
             const isWish = wishers.length > 0;
 
             // 3. Build Card UI
-            const color = isWish ? 0xFF007F : AlbumGameService.getRarityColor(roll.rarity);
+            let color = isWish ? 0xFF007F : AlbumGameService.getRarityColor(roll.rarity);
+            if (roll.variant === 'HOLOGRAPHIC') color = 0x00FFFF;
+            if (roll.variant === 'ERROR') color = 0xFF0000;
+
             let flavorText = this.getFlavorText(roll.rarity);
             if (isWish) flavorText = `✨ **A DIVINE MANIFESTATION!** ✨`;
+            if (roll.variant === 'HOLOGRAPHIC') flavorText = `🌈 **HOLOGRAPHIC VARIANT!** ` + flavorText;
+            if (roll.variant === 'ERROR') flavorText = `⚠️ **ERROR VARIANT!** ` + flavorText;
+
+            const titleText = roll.type === 'ALBUM'
+                ? `**${roll.artistName}** — **${roll.albumName}**`
+                : `**${roll.artistName}**`;
+
+            // RENDER CARD if special
+            let displayImage = roll.image;
+            let attachment: AttachmentBuilder | null = null;
+            if (roll.variant === 'HOLOGRAPHIC' || roll.variant === 'ERROR') {
+                const buffer = await AlbumRenderService.renderVariant({
+                    image: roll.image,
+                    variant: roll.variant
+                });
+                attachment = new AttachmentBuilder(buffer, { name: 'variant.png' });
+                displayImage = 'attachment://variant.png';
+            } else if (roll.rarity === 'LEGENDARY' || roll.rarity === 'EPIC') {
+                const buffer = await AlbumRenderService.renderAlbumCard({
+                    artistName: roll.artistName,
+                    albumName: roll.albumName,
+                    image: roll.image,
+                    rarity: roll.rarity as any,
+                    variant: roll.variant
+                });
+                attachment = new AttachmentBuilder(buffer, { name: 'card.png' });
+                displayImage = 'attachment://card.png';
+            } else {
+                // Proxy the normal image to Discord CDN
+                const proxied = await this.proxyImage(roll.image, interactionOrMessage.client);
+                displayImage = proxied || roll.image;
+            }
 
             const builder = new ComponentsV2()
                 .setAccent(color)
-                .addText(`### 🎲 ALBUM ROLL\n${flavorText}\n**${roll.artistName}** — **${roll.albumName}**`)
-                .setImage(proxiedImage || roll.image);
+                .addText(`### 🎲 ${roll.type} ROLL\n${flavorText}\n${titleText}`)
+                .setImage(displayImage);
+
+            const payload = builder.build();
+            if (attachment) payload.files = [attachment];
 
             if (isOwned) {
-                builder.addText(`\n💿 **Duplicate!** You already own this album.\nConverted into **${scrapValue} Vinyls**.`);
-                builder.addFooter(`Rarity: ${roll.rarity} • Rolls Left: ${MAX_ROLLS - newRolls}`);
+                builder.addText(`\n💿 **Duplicate!** You already own this item.\nConverted into **${scrapValue} Vinyls**.`);
+                builder.addFooter(`Rarity: ${roll.rarity} | Variant: ${roll.variant} • Rolls Left: ${MAX_ROLLS - newRolls}`);
                 await AlbumGameService.awardVinyls(discordId, scrapValue);
 
-                const payload = builder.build();
                 isSlash ? await interactionOrMessage.editReply(payload) : await channel.send(payload);
                 return;
             }
@@ -169,21 +231,21 @@ export default class AlbumCommand extends BaseCommand {
                 builder.addText(`\n🌟 **On wishlist of:** ${wisherMentions}`);
             }
 
-            builder.addFooter(`Rarity: ${roll.rarity} • Rolls Left: ${MAX_ROLLS - newRolls} • Exclusive: 15s`);
+            builder.addFooter(`Rarity: ${roll.rarity} | Variant: ${roll.variant} • Rolls Left: ${MAX_ROLLS - newRolls} • Exclusive: 15s`);
 
             // Claim Button
-            const claimId = `claim_album:${roll.albumId}:${roll.rarity}:${Date.now()}`;
+            const claimId = `claim_item:${roll.type}:${roll.itemId}:${roll.rarity}:${roll.variant}:${Date.now()}`;
             builder.addAction(`-# Priority claim for <@${discordId}>`, {
                 type: ComponentType.Button,
                 custom_id: claimId,
-                label: 'Claim Album',
+                label: `Claim ${roll.type === 'ALBUM' ? 'Album' : 'Artist'}`,
                 emoji: { name: '📥' },
                 style: ButtonStyle.Primary
             });
 
             const rollMsg = isSlash
-                ? await interactionOrMessage.editReply(builder.build())
-                : await channel.send(builder.build());
+                ? await interactionOrMessage.editReply(payload)
+                : await channel.send(payload);
 
             // 4. Interaction Collector
             const collector = rollMsg.createMessageComponentCollector({
@@ -194,9 +256,11 @@ export default class AlbumCommand extends BaseCommand {
 
             // Timer for Sniping
             let isSnipable = false;
+            let isClaimed = false;
             setTimeout(async () => {
+                if (isClaimed) return;
                 isSnipable = true;
-                builder.addFooter(`Rarity: ${roll.rarity} • Rolls Left: ${MAX_ROLLS - newRolls} • OPEN FOR SNIPING!`);
+                builder.addFooter(`Rarity: ${roll.rarity} | Variant: ${roll.variant} • Rolls Left: ${MAX_ROLLS - newRolls} • OPEN FOR SNIPING!`);
                 builder.payload.components[builder.payload.components.length - 2].components[0].content = `-# 🔓 **Open for anyone to claim!**`;
                 await rollMsg.edit(builder.build()).catch(() => { });
             }, 15000);
@@ -208,14 +272,21 @@ export default class AlbumCommand extends BaseCommand {
                 }
 
                 await i.deferUpdate();
-                const success = await AlbumGameService.claimAlbum(i.user.id, roll.albumId, roll.rarity);
+                const claimResult = await AlbumGameService.claimItem(i.user.id, roll.type, roll.itemId, roll.rarity, roll.variant);
 
-                if (success) {
+                if (claimResult.success) {
+                    isClaimed = true;
                     const claimedBuilder = new ComponentsV2()
                         .setAccent(0x4ade80)
-                        .addText(`### ✅ ALBUM ${i.user.id === discordId ? 'CLAIMED' : 'SNIPED'}!\n**${roll.artistName}** — **${roll.albumName}** added to <@${i.user.id}>'s collection.`)
+                        .addText(`### ✅ ${roll.type} ${i.user.id === discordId ? 'CLAIMED' : 'SNIPED'}!\n${titleText} added to <@${i.user.id}>'s collection.`);
+
+                    if (claimResult.message) {
+                        claimedBuilder.addText(`\n\n${claimResult.message}`);
+                    }
+
+                    claimedBuilder
                         .setThumbnail(roll.image)
-                        .addFooter(`Rarity: ${roll.rarity}`);
+                        .addFooter(`Rarity: ${roll.rarity} | Variant: ${roll.variant}`);
 
                     await i.editReply(claimedBuilder.build());
                 } else {
@@ -224,11 +295,11 @@ export default class AlbumCommand extends BaseCommand {
             });
 
             collector.on('end', async (collected: any) => {
-                if (collected.size === 0) {
+                if (collected.size === 0 && !isClaimed) {
                     const expiredBuilder = new ComponentsV2()
                         .setAccent(0x333333)
-                        .addText(`### 🎲 ALBUM ROLL\n❌ **Claim period expired.**\n**${roll.artistName}** — **${roll.albumName}** returned to the pool.`)
-                        .addFooter(`Rarity: ${roll.rarity}`);
+                        .addText(`### 🎲 ${roll.type} ROLL\n❌ **Claim period expired.**\n${titleText} returned to the pool.`)
+                        .addFooter(`Rarity: ${roll.rarity} | Variant: ${roll.variant}`);
 
                     if (isSlash) await interactionOrMessage.editReply(expiredBuilder.build());
                     else await rollMsg.edit(expiredBuilder.build()).catch(() => { });
@@ -272,7 +343,7 @@ export default class AlbumCommand extends BaseCommand {
             const claimedDate = new Date(item.claimedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
 
             // ── 1. CHECK RENDER CACHE ──
-            const cacheKey = `${albumName}:${rarity}`;
+            const cacheKey = `${albumName}:${rarity}:${item.variant}:${item.polishLevel}`;
             let cdnUrl = await RenderCacheService.getCachedImage('album_card', artist, cacheKey);
             let cardBuffer: Buffer | null = null;
 
@@ -280,12 +351,21 @@ export default class AlbumCommand extends BaseCommand {
                 const resolved = await TrackResolverService.resolveAlbum(artist, albumName);
                 const artworkUrl = resolved.artworkUrl || item.album.imageLarge || 'https://lastfm.freetls.fastly.net/i/u/300x300/2a96cbd8b46e442fc41c2b86b821562f.png';
 
-                cardBuffer = await AlbumRenderService.renderAlbumCard({
-                    artistName: artist,
-                    albumName: albumName,
-                    image: artworkUrl,
-                    rarity: rarity
-                });
+                if (item.variant === 'HOLOGRAPHIC' || item.variant === 'ERROR') {
+                    cardBuffer = await AlbumRenderService.renderVariant({
+                        image: artworkUrl,
+                        variant: item.variant
+                    });
+                } else {
+                    cardBuffer = await AlbumRenderService.renderAlbumCard({
+                        artistName: artist,
+                        albumName: albumName,
+                        image: artworkUrl,
+                        rarity: rarity,
+                        variant: item.variant,
+                        polishLevel: item.polishLevel
+                    });
+                }
 
                 // ── 2. UPLOAD TO STAGING CHANNEL FOR CDN URL ──
                 const stagingChannelId = config.CHART_STAGING_CHANNEL_ID;
@@ -300,7 +380,7 @@ export default class AlbumCommand extends BaseCommand {
 
                             if (cdnUrl) {
                                 await RenderCacheService.setCachedImage('album_card', artist, cacheKey, cdnUrl);
-                                setTimeout(() => stagingMsg.delete().catch(() => {}), 86400000);
+                                setTimeout(() => stagingMsg.delete().catch(() => { }), 86400000);
                             }
                         }
                     } catch (e) {
@@ -334,12 +414,22 @@ export default class AlbumCommand extends BaseCommand {
                 if (!cardBuffer) {
                     const resolved = await TrackResolverService.resolveAlbum(artist, albumName);
                     const artworkUrl = resolved.artworkUrl || item.album.imageLarge || 'https://lastfm.freetls.fastly.net/i/u/300x300/2a96cbd8b46e442fc41c2b86b821562f.png';
-                    cardBuffer = await AlbumRenderService.renderAlbumCard({
-                        artistName: artist,
-                        albumName: albumName,
-                        image: artworkUrl,
-                        rarity: rarity
-                    });
+
+                    if (item.variant === 'HOLOGRAPHIC' || item.variant === 'ERROR') {
+                        cardBuffer = await AlbumRenderService.renderVariant({
+                            image: artworkUrl,
+                            variant: item.variant
+                        });
+                    } else {
+                        cardBuffer = await AlbumRenderService.renderAlbumCard({
+                            artistName: artist,
+                            albumName: albumName,
+                            image: artworkUrl,
+                            rarity: rarity,
+                            variant: item.variant,
+                            polishLevel: item.polishLevel
+                        });
+                    }
                 }
                 payload.files = [new AttachmentBuilder(cardBuffer, { name: 'album_card.webp' })];
             }
@@ -643,11 +733,11 @@ export default class AlbumCommand extends BaseCommand {
                 .addText(`${rarityEmoji} **${item.album.artist.name}** — **${item.album.name}**\n`)
                 .addText(`Price: **${item.price}** 💿  |  Balance: **${profile?.vinylScraps || 0}** 💿\n`)
                 .addText(`\n-# ⏳ Refreshes in **${timeStr}**`);
-            
+
             let files = [];
             if (item.isSold) {
                 builder.addText(`\n\n> ⚠️ **SOLD OUT** — This album has already been claimed!`);
-                
+
                 // Only render premium card for SOLD OUT state
                 const cardBuffer = await AlbumRenderService.renderMarketCard({
                     artistName: item.album.artist.name,
@@ -656,7 +746,7 @@ export default class AlbumCommand extends BaseCommand {
                     rarity: item.rarity as AlbumRarity,
                     isSold: true
                 });
-                
+
                 builder.setImage('attachment://sold_out.webp');
                 files.push({ attachment: cardBuffer, name: 'sold_out.webp' });
             } else {
@@ -671,8 +761,8 @@ export default class AlbumCommand extends BaseCommand {
             });
             navRow.push({
                 type: ComponentType.Button, style: item.isSold ? ButtonStyle.Secondary : ButtonStyle.Primary,
-                label: item.isSold ? 'Sold Out' : `Buy for ${item.price} Vinyls`, 
-                custom_id: `mkt_buy:${item.id}`, 
+                label: item.isSold ? 'Sold Out' : `Buy for ${item.price} Vinyls`,
+                custom_id: `mkt_buy:${item.id}`,
                 emoji: { name: item.isSold ? '🚫' : '🛒' },
                 disabled: item.isSold
             });
@@ -717,7 +807,7 @@ export default class AlbumCommand extends BaseCommand {
                 const result = await AlbumGameService.buyFromMarket(i.user.id, marketId);
                 if (result.success) {
                     await i.followUp({ content: `✅ **Purchase Complete!**\n${result.msg}`, ephemeral: true });
-                    
+
                     // Refresh items and view
                     items = await AlbumGameService.getMarketItems();
                     await i.editReply(await buildPayload(currentIndex));
@@ -775,6 +865,297 @@ export default class AlbumCommand extends BaseCommand {
             : `💳 <@${targetId}> has **${profile.vinylScraps}** Vinyls.`;
 
         isSlash ? await interactionOrMessage.editReply(msg) : await channel.send(msg);
+    }
+
+    private async handlePolish(interactionOrMessage: any, isSlash: boolean, discordId: string, channel: TextChannel, args?: string[]): Promise<void> {
+        if (isSlash && !interactionOrMessage.deferred && !interactionOrMessage.replied) await interactionOrMessage.deferReply();
+        const query = isSlash ? interactionOrMessage.options.getString('query') : args?.slice(1).join(' ');
+
+        const dbUser = await prisma.user.findUnique({ where: { discordId }, include: { gameProfile: true } });
+        if (!dbUser || !dbUser.gameProfile) return;
+
+        // --- Helper Function to execute polish upgrade ---
+        const executePolish = async (item: any, isArtist: boolean, interactionOrMsgObj: any) => {
+            if (item.polishLevel >= 3) {
+                const msg = `✨ This item is already maxed out at **Rainbow Polish**!`;
+                if (interactionOrMsgObj.editReply) {
+                    await interactionOrMsgObj.editReply({ content: msg, components: [] });
+                } else {
+                    await channel.send(msg);
+                }
+                return;
+            }
+
+            const costs = [1000, 5000, 15000];
+            const nextLevel = item.polishLevel + 1;
+            const cost = costs[item.polishLevel];
+
+            if (dbUser.gameProfile!.vinylScraps < cost) {
+                const msg = `❌ You need **${cost} Vinyls** to upgrade to Level ${nextLevel}. You only have ${dbUser.gameProfile!.vinylScraps}.`;
+                if (interactionOrMsgObj.editReply) {
+                    await interactionOrMsgObj.editReply({ content: msg, components: [] });
+                } else {
+                    await channel.send(msg);
+                }
+                return;
+            }
+
+            // Deduct & Upgrade
+            await prisma.userGameProfile.update({
+                where: { userId: dbUser.id },
+                data: { vinylScraps: { decrement: cost }, collectionValue: { increment: cost } }
+            });
+
+            if (isArtist) {
+                await prisma.userArtistCollection.update({
+                    where: { id: item.id },
+                    data: { polishLevel: nextLevel }
+                });
+            } else {
+                await prisma.userAlbumCollection.update({
+                    where: { id: item.id },
+                    data: { polishLevel: nextLevel }
+                });
+            }
+
+            const levelNames = ['None', 'Gold 🥇', 'Diamond 💎', 'Rainbow 🌈'];
+            const nameText = isArtist ? `**${item.artist.name}**` : `**${item.album.artist.name}** — **${item.album.name}**`;
+            const msg = `✨ Successfully polished ${nameText} to **${levelNames[nextLevel]}** for ${cost} Vinyls!`;
+            if (interactionOrMsgObj.editReply) {
+                await interactionOrMsgObj.editReply({ content: msg, components: [] });
+            } else {
+                await channel.send(msg);
+            }
+        };
+
+        if (!query) {
+            // Interactive Select Menu mode
+            const albums = await prisma.userAlbumCollection.findMany({
+                where: { userId: dbUser.id, polishLevel: { lt: 3 } },
+                include: { album: { include: { artist: true } } },
+                take: 20
+            });
+            const artists = await prisma.userArtistCollection.findMany({
+                where: { userId: dbUser.id, polishLevel: { lt: 3 } },
+                include: { artist: true },
+                take: 5
+            });
+
+            if (albums.length === 0 && artists.length === 0) {
+                const msg = '❌ You have no items available to polish! Keep collecting or use a specific query.';
+                isSlash ? await interactionOrMessage.editReply(msg) : await channel.send(msg);
+                return;
+            }
+
+            const { ActionRowBuilder, StringSelectMenuBuilder, StringSelectMenuOptionBuilder } = require('discord.js');
+            const selectMenu = new StringSelectMenuBuilder()
+                .setCustomId('polish_select')
+                .setPlaceholder('Select an item to polish...');
+
+            for (const a of albums) {
+                selectMenu.addOptions(new StringSelectMenuOptionBuilder()
+                    .setLabel(`${a.album.artist.name} - ${a.album.name}`.substring(0, 100))
+                    .setDescription(`Lvl ${a.polishLevel} | Costs: ${a.polishLevel === 0 ? '1k' : a.polishLevel === 1 ? '5k' : '15k'}`)
+                    .setValue(`ALBUM:${a.id}`)
+                );
+            }
+            for (const a of artists) {
+                selectMenu.addOptions(new StringSelectMenuOptionBuilder()
+                    .setLabel(`Artist: ${a.artist.name}`.substring(0, 100))
+                    .setDescription(`Lvl ${a.polishLevel} | Costs: ${a.polishLevel === 0 ? '1k' : a.polishLevel === 1 ? '5k' : '15k'}`)
+                    .setValue(`ARTIST:${a.id}`)
+                );
+            }
+
+            const row = new ActionRowBuilder().addComponents(selectMenu);
+            const msgObj = await (isSlash
+                ? interactionOrMessage.editReply({ content: '✨ Select an item from your collection to upgrade:', components: [row] })
+                : channel.send({ content: '✨ Select an item from your collection to upgrade:', components: [row] }));
+
+            const collector = msgObj.createMessageComponentCollector({ time: 60000 });
+            collector.on('collect', async (i: any) => {
+                if (i.user.id !== discordId) return i.reply({ content: 'Not for you!', ephemeral: true });
+                await i.deferUpdate();
+
+                const [type, id] = i.values[0].split(':');
+                let selectedItem = null;
+                let isA = false;
+
+                if (type === 'ALBUM') {
+                    selectedItem = await prisma.userAlbumCollection.findUnique({ where: { id }, include: { album: { include: { artist: true } } } });
+                } else {
+                    selectedItem = await prisma.userArtistCollection.findUnique({ where: { id }, include: { artist: true } });
+                    isA = true;
+                }
+
+                if (selectedItem) {
+                    await executePolish(selectedItem, isA, i);
+                    collector.stop();
+                }
+            });
+            return;
+        }
+
+        // Direct Query mode
+        let item: any = await prisma.userAlbumCollection.findFirst({
+            where: { userId: dbUser.id, album: { OR: [{ name: { contains: query, mode: 'insensitive' } }, { artist: { name: { contains: query, mode: 'insensitive' } } }] } },
+            include: { album: { include: { artist: true } } }
+        });
+
+        let isArtist = false;
+        if (!item) {
+            item = await prisma.userArtistCollection.findFirst({
+                where: { userId: dbUser.id, artist: { name: { contains: query, mode: 'insensitive' } } },
+                include: { artist: true }
+            });
+            isArtist = true;
+        }
+
+        if (!item) {
+            const msg = `❌ Couldn't find \`${query}\` in your collection.`;
+            isSlash ? await interactionOrMessage.editReply(msg) : await channel.send(msg);
+            return;
+        }
+
+        await executePolish(item, isArtist, interactionOrMessage);
+
+
+    }
+
+    private async handleLeaderboard(interactionOrMessage: any, isSlash: boolean, discordId: string, channel: TextChannel): Promise<void> {
+        if (isSlash && !interactionOrMessage.deferred && !interactionOrMessage.replied) await interactionOrMessage.deferReply();
+
+        const topUsers = await prisma.userGameProfile.findMany({
+            orderBy: { collectionValue: 'desc' },
+            take: 10,
+            include: { user: true }
+        });
+
+        const builder = new ComponentsV2()
+            .setAccent(0xFFD700)
+            .addText(`### 🏆 Collection Value Leaderboard\n`);
+
+        if (topUsers.length === 0) builder.addText(`No collectors yet.`);
+
+        for (let i = 0; i < topUsers.length; i++) {
+            const profile = topUsers[i];
+            const medal = i === 0 ? '🥇' : i === 1 ? '🥈' : i === 2 ? '🥉' : '🔹';
+            builder.addText(`${medal} **<@${profile.user.discordId}>** — Value: **${profile.collectionValue.toLocaleString()}**`);
+        }
+
+        isSlash ? await interactionOrMessage.editReply(builder.build()) : await channel.send(builder.build());
+    }
+
+    private async handleQuests(interactionOrMessage: any, isSlash: boolean, discordId: string, channel: TextChannel): Promise<void> {
+        if (isSlash && !interactionOrMessage.deferred && !interactionOrMessage.replied) await interactionOrMessage.deferReply();
+        const msg = `🚧 Daily Quests are currently under construction! Check back soon.`;
+        isSlash ? await interactionOrMessage.editReply(msg) : await channel.send(msg);
+    }
+
+    private async handleStore(interactionOrMessage: any, isSlash: boolean, discordId: string, channel: TextChannel): Promise<void> {
+        if (isSlash && !interactionOrMessage.deferred && !interactionOrMessage.replied) await interactionOrMessage.deferReply();
+        else { try { channel.sendTyping(); } catch { } }
+
+        const builder = new ComponentsV2()
+            .setAccent(0x5865F2)
+            .addText(`### 🛒 BOOSTER PACK STORE\nSpend your Vinyls on guaranteed effects and rarities!\n\n`)
+            .addText(`🥇 **Gold Booster** — \`1,000\` Vinyls\n-# Guaranteed Level 1 Gold Polish\n`)
+            .addText(`💎 **Diamond Booster** — \`5,000\` Vinyls\n-# Guaranteed Level 2 Diamond Polish\n`)
+            .addText(`🌈 **Rainbow Booster** — \`15,000\` Vinyls\n-# Guaranteed Level 3 Rainbow Polish\n`)
+            .addText(`✨ **Holographic Pack** — \`25,000\` Vinyls\n-# Guaranteed Holographic Variant\n`)
+            .addText(`⚠️ **Glitch Pack** — \`60,000\` Vinyls\n-# Guaranteed Error Variant\n`);
+
+        const selectMenuId = `buy_pack:${discordId}:${Date.now()}`;
+        builder.addRow([
+            {
+                type: ComponentType.StringSelect,
+                custom_id: selectMenuId,
+                placeholder: 'Select a pack to purchase...',
+                options: [
+                    { label: 'Gold Booster', value: 'pack_gold', emoji: { name: '🥇' }, description: '1,000 Vinyls' },
+                    { label: 'Diamond Booster', value: 'pack_diamond', emoji: { name: '💎' }, description: '5,000 Vinyls' },
+                    { label: 'Rainbow Booster', value: 'pack_rainbow', emoji: { name: '🌈' }, description: '15,000 Vinyls' },
+                    { label: 'Holographic Pack', value: 'pack_holo', emoji: { name: '✨' }, description: '25,000 Vinyls' },
+                    { label: 'Glitch Pack', value: 'pack_error', emoji: { name: '⚠️' }, description: '60,000 Vinyls' }
+                ]
+            }
+        ]);
+
+        const msg = isSlash ? await interactionOrMessage.editReply(builder.build()) : await channel.send(builder.build());
+
+        const collector = msg.createMessageComponentCollector({
+            filter: (i: any) => i.customId === selectMenuId && i.user.id === discordId,
+            time: 60000,
+            max: 1
+        });
+
+        collector.on('collect', async (i: any) => {
+            await i.deferUpdate();
+            const packId = i.values[0];
+            const result = await AlbumGameService.buyPack(discordId, packId);
+
+            if (!result.success) {
+                await i.followUp({ content: `❌ ${result.msg}`, ephemeral: true });
+                return;
+            }
+
+            // Remove the menu and show the result
+            const loading = new ComponentsV2()
+                .setAccent(0x5865F2)
+                .addText('✨ **Opening your booster pack...**');
+            await i.editReply(loading.build());
+            
+            if (result.roll) {
+                await this.renderPackOpening(result.roll, discordId, channel, i, result.msg);
+            } else {
+                await i.followUp({ content: result.msg });
+            }
+        });
+    }
+
+    private async renderPackOpening(roll: GameRoll, discordId: string, channel: TextChannel, interaction: any, successMsg: string): Promise<void> {
+        let color = AlbumGameService.getRarityColor(roll.rarity);
+        if (roll.variant === 'HOLOGRAPHIC') color = 0x00FFFF;
+        if (roll.variant === 'ERROR') color = 0xFF0000;
+
+        const titleText = roll.type === 'ALBUM'
+            ? `**${roll.artistName}** — **${roll.albumName}**`
+            : `**${roll.artistName}**`;
+
+        // RENDER CARD if special
+        let displayImage = roll.image;
+        let attachment: AttachmentBuilder | null = null;
+        
+        if (roll.variant === 'HOLOGRAPHIC' || roll.variant === 'ERROR') {
+            const buffer = await AlbumRenderService.renderVariant({
+                image: roll.image,
+                variant: roll.variant
+            });
+            attachment = new AttachmentBuilder(buffer, { name: 'variant.png' });
+            displayImage = 'attachment://variant.png';
+        } else {
+            const buffer = await AlbumRenderService.renderAlbumCard({
+                artistName: roll.artistName,
+                albumName: roll.albumName,
+                image: roll.image,
+                rarity: roll.rarity as any,
+                variant: roll.variant,
+                polishLevel: (roll as any).polishLevel || 0
+            });
+            attachment = new AttachmentBuilder(buffer, { name: 'card.png' });
+            displayImage = 'attachment://card.png';
+        }
+
+        const builder = new ComponentsV2()
+            .setAccent(color)
+            .addText(`### ${successMsg}\n${titleText}`)
+            .setImage(displayImage)
+            .addFooter(`Rarity: ${roll.rarity} | Variant: ${roll.variant}`);
+
+        const payload = builder.build();
+        if (attachment) payload.files = [attachment];
+
+        await interaction.followUp(payload);
     }
 
     private getRarityEmoji(rarity: AlbumRarity): string {
