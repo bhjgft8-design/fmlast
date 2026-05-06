@@ -4,9 +4,9 @@ import path from 'path';
 import NodeID3 from 'node-id3';
 import { config } from '../../../config';
 
-const SLSKD_URL = config.SLSKD_URL;
-const SLSKD_API_KEY = config.SLSKD_API_KEY;
-const SLSKD_DOWNLOADS_DIR = config.SLSKD_DOWNLOADS_DIR;
+const SLSKD_URL = config.SLSKD_URL || 'http://localhost:5030';
+const SLSKD_API_KEY = config.SLSKD_API_KEY || '';
+const SLSKD_DOWNLOADS_DIR = config.SLSKD_DOWNLOADS_DIR || '/downloads';
 
 const PREFERRED_FORMATS = ['.flac', '.mp3', '.ogg', '.m4a'];
 const MAX_WAIT_MS = 120_000;   // 2 min total
@@ -26,11 +26,7 @@ interface SlskFile {
 
 export class SlskdDownloader {
 
-    /**
-     * Search slskd and return ranked file candidates.
-     */
     private static async search(query: string): Promise<SlskFile[]> {
-        // 1. Start search
         const { data: search } = await api.post('/searches', {
             searchText: query,
             fileLimit: 100,
@@ -40,12 +36,10 @@ export class SlskdDownloader {
         const searchId: string = search.id;
         console.log(`🔍 slskd search started: ${searchId}`);
 
-        // 2. Poll until complete (slskd searches run for ~5s by default)
         await this.sleep(6000);
 
         const { data: results } = await api.get(`/searches/${searchId}`);
 
-        // 3. Flatten all files from all peers
         const files: SlskFile[] = [];
         for (const response of results.responses ?? []) {
             for (const file of response.files ?? []) {
@@ -58,18 +52,12 @@ export class SlskdDownloader {
             }
         }
 
-        // 4. Clean up search
         await api.delete(`/searches/${searchId}`).catch(() => {});
 
         return files;
     }
 
-    /**
-     * Pick the best file: prefer MP3 320 > FLAC > MP3 > others.
-     */
     private static pickBest(files: SlskFile[], artist: string, title: string): SlskFile | null {
-        const query = `${artist} ${title}`.toLowerCase();
-
         const scored = files
             .filter(f => {
                 const ext = path.extname(f.filename).toLowerCase();
@@ -80,17 +68,14 @@ export class SlskdDownloader {
                 const ext = path.extname(name);
                 let score = 0;
 
-                // Filename relevance
                 if (name.includes(artist.toLowerCase())) score += 10;
                 if (name.includes(title.toLowerCase())) score += 10;
 
-                // Format preference
                 if (ext === '.mp3' && (f.bitRate ?? 0) >= 320) score += 8;
                 else if (ext === '.flac') score += 7;
                 else if (ext === '.mp3' && (f.bitRate ?? 0) >= 192) score += 5;
                 else if (ext === '.mp3') score += 3;
 
-                // Avoid very small files (likely corrupt/preview)
                 if (f.size < 1_000_000) score -= 20;
 
                 return { file: f, score };
@@ -100,20 +85,15 @@ export class SlskdDownloader {
         return scored[0]?.file ?? null;
     }
 
-    /**
-     * Queue a download on slskd and wait for it to finish.
-     */
-    private static async queueAndWait(file: SlskFile): Promise<string> {
+    private static async queueAndWait(file: SlskFile): Promise<{ username: string; filename: string }> {
         const encodedUsername = encodeURIComponent(file.username);
 
-        // Queue download
         await api.post(`/transfers/downloads/${encodedUsername}`, {
             files: [{ filename: file.filename }]
         });
 
         console.log(`⬇️  Queued: ${file.filename} from ${file.username}`);
 
-        // Poll until complete
         const deadline = Date.now() + MAX_WAIT_MS;
 
         while (Date.now() < deadline) {
@@ -132,7 +112,7 @@ export class SlskdDownloader {
             console.log(`📊 Status: ${match.state} | ${Math.round((match.bytesTransferred / match.size) * 100)}%`);
 
             if (match.state === 'Completed, Succeeded') {
-                return match.filename; // Full path on disk
+                return { username: file.username, filename: file.filename };
             }
 
             if (match.state?.startsWith('Completed,') && match.state !== 'Completed, Succeeded') {
@@ -143,50 +123,54 @@ export class SlskdDownloader {
         throw new Error('Download timed out after 2 minutes.');
     }
 
-    /**
-     * Main entry point
-     */
+    private static async findDownloadedFile(username: string, remoteFilename: string): Promise<string> {
+        // slskd saves to: /downloads/{username}/{original_path_basename}
+        const basename = path.basename(remoteFilename.replace(/\\/g, '/'));
+        const userDir = path.join(SLSKD_DOWNLOADS_DIR, username);
+        
+        const found = this.findFileRecursive(userDir, basename);
+        if (!found) {
+            throw new Error(`Downloaded file not found in ${userDir}. Looking for: ${basename}`);
+        }
+        return found;
+    }
+
+    private static findFileRecursive(dir: string, filename: string): string | null {
+        if (!fs.existsSync(dir)) return null;
+        
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+            const fullPath = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                const found = this.findFileRecursive(fullPath, filename);
+                if (found) return found;
+            } else if (entry.name === filename) {
+                return fullPath;
+            }
+        }
+        return null;
+    }
+
     static async downloadTrack(
         outputPath: string,
         metadata: { name: string; artist: string; album: string; artworkUrl?: string }
     ): Promise<string> {
         const query = `${metadata.artist} ${metadata.name}`;
 
-        // 1. Search
         const files = await this.search(query);
-        if (files.length === 0) {
-            throw new Error(`No results found on Soulseek for: ${query}`);
-        }
+        if (files.length === 0) throw new Error(`No results found on Soulseek for: ${query}`);
 
-        // 2. Pick best file
         const best = this.pickBest(files, metadata.artist, metadata.name);
-        if (!best) {
-            throw new Error(`No suitable audio file found for: ${query}`);
-        }
+        if (!best) throw new Error(`No suitable audio file found for: ${query}`);
 
-        console.log(`✅ Best match: ${best.filename} (${best.bitRate ?? '?'}kbps, ${(best.size / 1_048_576).toFixed(1)}MB)`);
+        console.log(`✅ Best match: ${best.filename} (${best.bitRate ?? '?'}kbps)`);
 
-        // 3. Download via slskd
-        const downloadedPath = await this.queueAndWait(best);
+        const { username, filename } = await this.queueAndWait(best);
 
-        // 4. Copy from slskd's download dir to our temp output path
-        //    slskd saves to SLSKD_DOWNLOADS_DIR — we read and copy
-        const slskdFilePath = path.join(
-            SLSKD_DOWNLOADS_DIR,
-            path.basename(downloadedPath)
-        );
+        await this.sleep(1000); // let file flush to disk
 
-        // Wait a moment for file to be fully flushed
-        await this.sleep(500);
-        if (!fs.existsSync(slskdFilePath)) {
-            // Fallback: search recursively if needed, but basename is usually enough
-            console.error(`File not found at ${slskdFilePath}. Checking slskd downloads structure...`);
-            throw new Error(`Could not find downloaded file at ${slskdFilePath}. Check shared volume mount.`);
-        }
-        
+        const slskdFilePath = await this.findDownloadedFile(username, filename);
         fs.copyFileSync(slskdFilePath, outputPath);
 
-        // 5. Write ID3 tags (MP3 only)
         const ext = path.extname(best.filename).toLowerCase();
         if (ext === '.mp3') {
             const tags: any = {
@@ -203,9 +187,7 @@ export class SlskdDownloader {
                         description: 'Front Cover',
                         imageBuffer: artData.data
                     };
-                } catch (e) {
-                    console.warn('Failed to fetch artwork for ID3 tagging.');
-                }
+                } catch (e) {}
             }
             NodeID3.write(tags, outputPath);
         }

@@ -1,8 +1,8 @@
 FROM node:22-slim
 
-# Install Chrome and necessary libraries for Puppeteer, as well as FFmpeg
+# Install system dependencies for Chrome, FFmpeg, and Slskd/Supervisor
 RUN apt-get update \
-    && apt-get install -y wget gnupg \
+    && apt-get install -y wget gnupg supervisor curl ca-certificates \
     && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/googlechrome-linux-keyring.gpg \
     && sh -c 'echo "deb [arch=amd64 signed-by=/usr/share/keyrings/googlechrome-linux-keyring.gpg] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list' \
     && apt-get update \
@@ -10,11 +10,14 @@ RUN apt-get update \
       --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
+# Install slskd
+RUN wget -q https://github.com/slskd/slskd/releases/latest/download/slskd-linux-x64 \
+    -O /usr/local/bin/slskd && chmod +x /usr/local/bin/slskd
 
 # Set up working directory
 WORKDIR /usr/src/app
 
-# Tell Puppeteer to skip installing Chrome and use the system one
+# Tell Puppeteer to use the system Chrome
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
 
@@ -30,5 +33,12 @@ COPY . .
 # Generate Prisma Client
 RUN npx prisma generate
 
-# Start the bot
-CMD ["npm", "start"]
+# Create necessary directories
+RUN mkdir -p /downloads /usr/src/app/logs /usr/src/app/slskd-data
+
+# Supervisord config
+COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+
+EXPOSE 3000 5030
+
+CMD ["/usr/bin/supervisord", "-c", "/etc/supervisor/conf.d/supervisord.conf"]
