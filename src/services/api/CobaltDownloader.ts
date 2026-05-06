@@ -1,61 +1,76 @@
 import axios from 'axios';
 import fs from 'fs';
 import NodeID3 from 'node-id3';
-import { config } from '../../../config';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
 
 export class CobaltDownloader {
 
     static async downloadTrack(
         outputPath: string,
-        metadata: { name: string; artist: string; album: string; artworkUrl?: string; youtubeUrl: string }
+        metadata: { name: string; artist: string; album: string; artworkUrl?: string; spotifyUrl: string }
     ): Promise<string> {
-        if (!config.COBALT_URL) {
-            throw new Error("COBALT_URL is not set in environment variables.");
+        const apiKey = process.env.RAPIDAPI_KEY;
+        if (!apiKey) {
+            throw new Error("RAPIDAPI_KEY is missing. Add it to your environment variables.");
         }
 
-        const baseUrl = config.COBALT_URL.endsWith('/') ? config.COBALT_URL : `${config.COBALT_URL}/`;
-        console.log(`📥 Cobalt v10: Requesting ${metadata.name}`);
+        console.log(`📥 Spotify Engine: Processing ${metadata.name}`);
 
-        // 1. Get stream URL
-        const { data: cobaltRes } = await axios.post(baseUrl, {
-            url: metadata.youtubeUrl,
-            videoQuality: '1080',
-            audioFormat: 'mp3',
-            downloadMode: 'audio'
-        }, {
+        // 1. Use Spotify Downloader API
+        const options = {
+            method: 'GET',
+            url: 'https://spotify-downloader9.p.rapidapi.com/downloadSong',
+            params: { songId: metadata.spotifyUrl },
             headers: {
-                'Accept': 'application/json',
-                'Content-Type': 'application/json'
+                'x-rapidapi-key': apiKey,
+                'x-rapidapi-host': 'spotify-downloader9.p.rapidapi.com'
             }
-        });
+        };
 
-        if (cobaltRes.status === 'error' || !cobaltRes.url) {
-            throw new Error(`Cobalt Error: ${cobaltRes.text || 'No URL returned'}`);
+        let apiRes: any;
+        try {
+            const response = await axios.request(options);
+            apiRes = response.data;
+        } catch (err: any) {
+            if (err.response) {
+                console.error('❌ RapidAPI Error Details:', JSON.stringify(err.response.data, null, 2));
+                throw new Error(`RapidAPI 403: ${err.response.data.message || 'Forbidden. Ensure you are subscribed to "Spotify Downloader" on RapidAPI.'}`);
+            }
+            throw err;
+        }
+        
+        console.log('📡 Spotify API Response:', JSON.stringify(apiRes, null, 2));
+
+        const downloadLink = apiRes.data?.downloadLink || apiRes.link || apiRes.data?.url;
+
+        if (!downloadLink) {
+            throw new Error(`API Error: No download link in response. Status: ${apiRes.success}`);
         }
 
-        console.log(`🔗 Stream URL obtained. Downloading binary...`);
+        console.log(`✅ API resolved link. Downloading binary...`);
 
-        // 2. Download the binary with redirect support
-        const response = await axios.get(cobaltRes.url, {
-            responseType: 'arraybuffer',
-            timeout: 90_000,
-            maxRedirects: 10,
-            headers: { 
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
-        });
-
-        const buffer = Buffer.from(response.data);
-        const sizeMb = (buffer.length / (1024 * 1024)).toFixed(2);
-        console.log(`📦 Downloaded size: ${sizeMb} MB`);
-
-        if (buffer.length < 500000) { // Less than 500KB is likely an error page
-            throw new Error(`Downloaded file is suspiciously small (${sizeMb}MB). It might be an error page instead of audio.`);
+        // 2. Download via curl
+        try {
+            const curlCmd = `curl -L -s -o "${outputPath}" -A "Mozilla/5.0" "${downloadLink}"`;
+            await execAsync(curlCmd, { timeout: 120_000 });
+        } catch (err: any) {
+            throw new Error(`Binary download failed: ${err.message}`);
         }
 
-        fs.writeFileSync(outputPath, buffer);
+        if (!fs.existsSync(outputPath)) throw new Error("Download failed: File not created.");
 
-        // 3. Write ID3 tags
+        const stats = fs.statSync(outputPath);
+        const sizeMb = (stats.size / (1024 * 1024)).toFixed(2);
+        console.log(`📦 Final Size: ${sizeMb} MB`);
+
+        if (stats.size < 500000) {
+            throw new Error(`Download failed. File size is too small (${sizeMb} MB).`);
+        }
+
+        // 3. Tags
         const tags: any = {
             title: metadata.name,
             artist: metadata.artist,
@@ -74,12 +89,8 @@ export class CobaltDownloader {
             } catch (_) {}
         }
 
-        const success = NodeID3.write(tags, outputPath);
-        if (success) {
-            console.log(`✅ ID3 Tags written for: ${metadata.name}`);
-        } else {
-            console.warn(`⚠️ Failed to write ID3 tags for: ${metadata.name}`);
-        }
+        NodeID3.write(tags, outputPath);
+        console.log(`✅ Success: ${metadata.name}`);
 
         return outputPath;
     }

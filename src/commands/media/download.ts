@@ -12,7 +12,7 @@ import archiver from 'archiver';
 
 export default class DownloadCommand extends BaseCommand {
     name = "download";
-    description = "Download a Spotify track or album via Cobalt.";
+    description = "Download a Spotify track or album.";
     aliases = ["dl"];
 
     slashData = new SlashCommandBuilder()
@@ -53,7 +53,7 @@ export default class DownloadCommand extends BaseCommand {
             const albumMatch = link.match(/album\/([a-zA-Z0-9]+)/);
             const playlistMatch = link.match(/playlist\/([a-zA-Z0-9]+)/);
 
-            let tracks: { name: string; artist: string; artworkUrl?: string; youtubeUrl?: string }[] = [];
+            let tracks: { name: string; artist: string; artworkUrl?: string; spotifyUrl: string }[] = [];
             let collectionName = "Download";
             let collectionArt: string | null = null;
 
@@ -65,7 +65,7 @@ export default class DownloadCommand extends BaseCommand {
                         name: resolved.title,
                         artist: resolved.artist,
                         artworkUrl: resolved.artworkUrl || undefined,
-                        youtubeUrl: resolved.links.youtube || undefined
+                        spotifyUrl: `https://open.spotify.com/track/${trackMatch[1]}`
                     });
                     collectionName = resolved.title;
                     collectionArt = resolved.artworkUrl;
@@ -79,23 +79,21 @@ export default class DownloadCommand extends BaseCommand {
                     
                     const albumTracks = await Spotify.getAlbumTracks(albumMatch[1]);
                     for (const t of albumTracks) {
-                        const r = await TrackResolverService.resolve(t.artist, t.name).catch(() => null);
                         tracks.push({
                             name: t.name,
                             artist: t.artist,
                             artworkUrl: collectionArt || undefined,
-                            youtubeUrl: r?.links.youtube || undefined
+                            spotifyUrl: `https://open.spotify.com/track/${t.id}`
                         });
                     }
                 }
             } else if (playlistMatch) {
                 const playlistTracks = await Spotify.getPlaylistTracks(playlistMatch[1]);
                 for (const t of playlistTracks) {
-                    const r = await TrackResolverService.resolve(t.artist, t.name).catch(() => null);
                     tracks.push({
                         name: t.name,
                         artist: t.artist,
-                        youtubeUrl: r?.links.youtube || undefined
+                        spotifyUrl: `https://open.spotify.com/track/${t.id}`
                     });
                 }
                 collectionName = "Playlist";
@@ -110,7 +108,7 @@ export default class DownloadCommand extends BaseCommand {
 
             const statusEmbed = new EmbedBuilder()
                 .setTitle(`📥 ${collectionName}`)
-                .setDescription(`🔍 Found **${tracks.length}** tracks. Resolving streams...`)
+                .setDescription(`🔍 Found **${tracks.length}** tracks. Requesting MP3s...`)
                 .setColor(0x00FF00);
 
             if (collectionArt) statusEmbed.setThumbnail(collectionArt);
@@ -126,11 +124,6 @@ export default class DownloadCommand extends BaseCommand {
             // 3. Download Tracks
             for (let i = 0; i < tracks.length; i++) {
                 const track = tracks[i];
-                if (!track.youtubeUrl) {
-                    console.warn(`No stream found for ${track.name}`);
-                    continue;
-                }
-
                 try {
                     const progress = `Processing **${i + 1}/${tracks.length}**: *${track.name}*...`;
                     statusEmbed.setDescription(progress);
@@ -139,12 +132,19 @@ export default class DownloadCommand extends BaseCommand {
                     const fileName = `${track.artist} - ${track.name}.mp3`.replace(/[\\/:*?"<>|]/g, "");
                     const outputPath = path.join(tempDir, fileName);
 
+                    // Use UTR for artwork if not resolved
+                    let artworkUrl = track.artworkUrl;
+                    if (!artworkUrl && playlistMatch) {
+                        const resolved = await TrackResolverService.resolve(track.artist, track.name).catch(() => null);
+                        artworkUrl = resolved?.artworkUrl || undefined;
+                    }
+
                     await CobaltDownloader.downloadTrack(outputPath, {
                         name: track.name,
                         artist: track.artist,
                         album: collectionName,
-                        artworkUrl: track.artworkUrl,
-                        youtubeUrl: track.youtubeUrl
+                        artworkUrl: artworkUrl,
+                        spotifyUrl: track.spotifyUrl
                     });
 
                     downloadedFiles.push(outputPath);
@@ -154,10 +154,10 @@ export default class DownloadCommand extends BaseCommand {
             }
 
             if (downloadedFiles.length === 0) {
-                throw new Error("Failed to download any tracks. Check if your Cobalt URL is correct.");
+                throw new Error("Failed to download any tracks. Check your RapidAPI subscription.");
             }
 
-            // 4. Upload
+            // 4. Final Processing
             statusEmbed.setDescription(`📦 Uploading **${downloadedFiles.length}** files...`);
             await statusMsg.edit({ embeds: [statusEmbed] }).catch(() => {});
 
@@ -169,9 +169,9 @@ export default class DownloadCommand extends BaseCommand {
                 const output = fs.createWriteStream(zipPath);
                 const archive = archiver('zip', { zlib: { level: 9 } });
 
-                const zipTask = new Promise((resolve, reject) => {
+                const zipTask = new Promise((resolve, resolveErr) => {
                     output.on('close', resolve);
-                    archive.on('error', reject);
+                    archive.on('error', resolveErr);
                 });
 
                 archive.pipe(output);
@@ -187,7 +187,7 @@ export default class DownloadCommand extends BaseCommand {
 
             const finalEmbed = new EmbedBuilder()
                 .setTitle(`✅ ${collectionName} Ready`)
-                .setDescription(`Successfully downloaded **${downloadedFiles.length}** tracks via Cobalt.\n\n[**Click here to download**](${downloadUrl})`)
+                .setDescription(`Successfully downloaded **${downloadedFiles.length}** tracks.\n\n[**Click here to download**](${downloadUrl})`)
                 .setColor(0x00FF00)
                 .setTimestamp();
             

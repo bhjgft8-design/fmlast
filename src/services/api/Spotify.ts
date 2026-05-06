@@ -494,7 +494,7 @@ export class Spotify {
     }
 
     /** Get tracks from a Spotify album */
-    static async getAlbumTracks(albumId: string): Promise<{ name: string; artist: string }[]> {
+    static async getAlbumTracks(albumId: string): Promise<{ name: string; artist: string; id: string }[]> {
         if (this.isDisabled()) return [];
 
         try {
@@ -506,7 +506,8 @@ export class Spotify {
 
             return (data.items || []).map((t: any) => ({
                 name: t.name,
-                artist: t.artists?.[0]?.name || 'Unknown Artist'
+                artist: t.artists?.[0]?.name || 'Unknown Artist',
+                id: t.id
             }));
         } catch (err: any) {
             this.handleApiError(err);
@@ -561,7 +562,7 @@ export class Spotify {
     }
 
     /** Get tracks from a Spotify playlist */
-    static async getPlaylistTracks(playlistId: string): Promise<{ name: string; artist: string }[]> {
+    static async getPlaylistTracks(playlistId: string): Promise<{ name: string; artist: string; id: string }[]> {
         if (this.isDisabled()) return [];
 
         try {
@@ -571,7 +572,7 @@ export class Spotify {
                 headers: { Authorization: `Bearer ${token}` },
                 params: { 
                     limit: 100,
-                    fields: 'items(track(name,artists(name)))'
+                    fields: 'items(track(name,id,artists(name)))'
                 }
             });
 
@@ -579,7 +580,8 @@ export class Spotify {
                 .filter((i: any) => i.track)
                 .map((i: any) => ({
                     name: i.track.name,
-                    artist: i.track.artists?.[0]?.name || 'Unknown Artist'
+                    artist: i.track.artists?.[0]?.name || 'Unknown Artist',
+                    id: i.track.id
                 }));
         } catch (err: any) {
             this.handleApiError(err);
