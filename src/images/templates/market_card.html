@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+
+        body {
+            width: 1080px;
+            height: 1080px;
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        .album-container {
+            width: 1080px;
+            height: 1080px;
+            position: relative;
+        }
+
+        .album-art {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            display: block;
+        }
+
+        /* ── Sold Out Overlay ── */
+        .sold-out-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: grayscale(0.5) brightness(0.7);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 10;
+        }
+
+        .sold-out-stamp {
+            border: 10px solid #ff3b3b;
+            color: #ff3b3b;
+            font-size: 110px;
+            font-weight: 900;
+            padding: 20px 45px;
+            text-transform: uppercase;
+            transform: rotate(-12deg);
+            border-radius: 15px;
+            letter-spacing: 8px;
+            text-shadow: 0 0 20px rgba(255, 59, 59, 0.4);
+            box-shadow: 
+                inset 0 0 0 4px #ff3b3b,
+                0 0 40px rgba(0, 0, 0, 0.6);
+            background: rgba(0, 0, 0, 0.15);
+            line-height: 1;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="album-container">
+        <img class="album-art" src="{{image}}" alt="">
+        
+        <div class="sold-out-overlay">
+            <div class="sold-out-stamp">SOLD OUT</div>
+        </div>
+    </div>
+
+</body>
+</html>

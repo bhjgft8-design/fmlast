@@ -600,7 +600,9 @@ export default class AlbumCommand extends BaseCommand {
         else { try { channel.sendTyping(); } catch { } }
 
         let items = await AlbumGameService.getMarketItems();
-        if (items.length === 0) {
+        const isExpired = items.length > 0 && items[0].expiresAt && items[0].expiresAt < new Date();
+
+        if (items.length === 0 || isExpired) {
             await AlbumGameService.refreshMarket();
             items = await AlbumGameService.getMarketItems();
         }
@@ -632,14 +634,35 @@ export default class AlbumCommand extends BaseCommand {
                 if (proxiedImage) await AlbumGameService.cacheProxyUrl(resolved.artworkUrl, proxiedImage);
             }
 
-                const fallbackImage = item.album.imageLarge || 'https://lastfm.freetls.fastly.net/i/u/300x300/2a96cbd8b46e442fc41c2b86b821562f.png';
-                const builder = new ComponentsV2()
-                    .setAccent(color)
-                    .addText(`### 🏪 GLOBAL MARKET (#${idx + 1}/${items.length})\n`)
-                    .addText(`${rarityEmoji} **${item.album.artist.name}** — **${item.album.name}**\n`)
-                    .addText(`Price: **${item.price}** 💿  |  Balance: **${profile?.vinylScraps || 0}** 💿\n`)
-                    .addText(`\n-# ⏳ Refreshes in **${timeStr}**`)
-                    .setImage(proxiedImage || resolved.artworkUrl || fallbackImage);
+            const fallbackImage = item.album.imageLarge || 'https://lastfm.freetls.fastly.net/i/u/300x300/2a96cbd8b46e442fc41c2b86b821562f.png';
+            const finalImageUrl = proxiedImage || resolved.artworkUrl || fallbackImage;
+
+            const builder = new ComponentsV2()
+                .setAccent(color)
+                .addText(`### 🏪 GLOBAL MARKET (#${idx + 1}/${items.length})\n`)
+                .addText(`${rarityEmoji} **${item.album.artist.name}** — **${item.album.name}**\n`)
+                .addText(`Price: **${item.price}** 💿  |  Balance: **${profile?.vinylScraps || 0}** 💿\n`)
+                .addText(`\n-# ⏳ Refreshes in **${timeStr}**`);
+            
+            let files = [];
+            if (item.isSold) {
+                builder.addText(`\n\n> ⚠️ **SOLD OUT** — This album has already been claimed!`);
+                
+                // Only render premium card for SOLD OUT state
+                const cardBuffer = await AlbumRenderService.renderMarketCard({
+                    artistName: item.album.artist.name,
+                    albumName: item.album.name,
+                    image: finalImageUrl,
+                    rarity: item.rarity as AlbumRarity,
+                    isSold: true
+                });
+                
+                builder.setImage('attachment://sold_out.webp');
+                files.push({ attachment: cardBuffer, name: 'sold_out.webp' });
+            } else {
+                // Use raw image for available albums (fast & simple)
+                builder.setImage(finalImageUrl);
+            }
 
             const navRow: any[] = [];
             if (idx > 0) navRow.push({
@@ -647,8 +670,11 @@ export default class AlbumCommand extends BaseCommand {
                 label: 'Prev', custom_id: 'mkt_prev', emoji: { name: '⬅️' }
             });
             navRow.push({
-                type: ComponentType.Button, style: ButtonStyle.Primary,
-                label: `Buy for ${item.price} Vinyls`, custom_id: `mkt_buy:${item.id}`, emoji: { name: '🛒' }
+                type: ComponentType.Button, style: item.isSold ? ButtonStyle.Secondary : ButtonStyle.Primary,
+                label: item.isSold ? 'Sold Out' : `Buy for ${item.price} Vinyls`, 
+                custom_id: `mkt_buy:${item.id}`, 
+                emoji: { name: item.isSold ? '🚫' : '🛒' },
+                disabled: item.isSold
             });
             if (idx < items.length - 1) navRow.push({
                 type: ComponentType.Button, style: ButtonStyle.Secondary,
@@ -656,7 +682,7 @@ export default class AlbumCommand extends BaseCommand {
             });
             builder.addRow(navRow);
 
-            return builder.build();
+            return { ...builder.build(), files };
         };
 
         // Initial send
@@ -690,14 +716,12 @@ export default class AlbumCommand extends BaseCommand {
                 const marketId = i.customId.split(':')[1];
                 const result = await AlbumGameService.buyFromMarket(i.user.id, marketId);
                 if (result.success) {
-                    const successPayload = new ComponentsV2()
-                        .setAccent(0x4ade80)
-                        .addText(`### ✅ Purchase Complete!\n${result.msg}`)
-                        .build();
-                    await i.editReply(successPayload);
-                    collector.stop();
+                    await i.followUp({ content: `✅ **Purchase Complete!**\n${result.msg}`, ephemeral: true });
+                    
+                    // Refresh items and view
+                    items = await AlbumGameService.getMarketItems();
+                    await i.editReply(await buildPayload(currentIndex));
                 } else {
-                    // Errors go as ephemeral followUp (allowed as plain content since it's a new message)
                     await i.followUp({ content: `❌ ${result.msg}`, ephemeral: true });
                 }
             }

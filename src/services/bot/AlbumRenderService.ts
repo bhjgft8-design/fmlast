@@ -16,11 +16,10 @@ export class AlbumRenderService {
             Math.floor(Math.random() * 16) + 8
         );
 
-        // Fetch artist profile picture
         let artistImage: string | null = null;
         try {
             artistImage = await Spotify.getArtistCover(data.artistName);
-        } catch { /* silently fall back to null */ }
+        } catch { }
 
         return await PuppeteerService.render('album_card', {
             ...data,
@@ -29,6 +28,36 @@ export class AlbumRenderService {
             rarityIcon: this.getRarityIcon(data.rarity),
             artistImage: artistImage || null,
             barcodeBars,
+        }, { width: 1080, height: 1080 });
+    }
+
+    /**
+     * Renders a premium album card for the global market.
+     */
+    static async renderMarketCard(data: {
+        artistName: string;
+        albumName: string;
+        image: string;
+        rarity: AlbumRarity;
+        isSold?: boolean;
+    }): Promise<Buffer> {
+        const barcodeBars = Array.from({ length: 40 }, () =>
+            Math.floor(Math.random() * 16) + 8
+        );
+
+        let artistImage: string | null = null;
+        try {
+            artistImage = await Spotify.getArtistCover(data.artistName);
+        } catch { }
+
+        return await PuppeteerService.render('market_card', {
+            ...data,
+            rarityColor: this.getRarityColor(data.rarity),
+            rarityLabel: data.rarity,
+            rarityIcon: this.getRarityIcon(data.rarity),
+            artistImage: artistImage || null,
+            barcodeBars,
+            isSold: data.isSold || false,
         }, { width: 1080, height: 1080 });
     }
 

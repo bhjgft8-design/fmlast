@@ -43,6 +43,14 @@ export class AlbumGameService {
                 SELECT a.id, a.name as "albumName", art.name as "artistName"
                 FROM albums a
                 JOIN artists art ON a.artist_id = art.id
+                WHERE a.name NOT LIKE '%Ù%' 
+                  AND a.name NOT LIKE '%Ø%'
+                  AND a.name NOT LIKE '%%'
+                  AND a.name NOT LIKE '%??%'
+                  AND art.name NOT LIKE '%Ù%'
+                  AND art.name NOT LIKE '%Ø%'
+                  AND art.name NOT LIKE '%%'
+                  AND LENGTH(a.name) > 1
                 ORDER BY RANDOM()
                 LIMIT 1
             `;
@@ -290,13 +298,28 @@ export class AlbumGameService {
     }
 
     private static async pickRandomAlbum() {
-        const albums = await prisma.$queryRaw<any[]>`SELECT id FROM albums ORDER BY RANDOM() LIMIT 1`;
+        const albums = await prisma.$queryRaw<any[]>`
+            SELECT a.id 
+            FROM albums a
+            JOIN artists art ON a.artist_id = art.id
+            WHERE a.name NOT LIKE '%Ù%' 
+              AND a.name NOT LIKE '%Ø%'
+              AND a.name NOT LIKE '%%'
+              AND a.name NOT LIKE '%??%'
+              AND art.name NOT LIKE '%Ù%'
+              AND art.name NOT LIKE '%Ø%'
+              AND art.name NOT LIKE '%%'
+              AND LENGTH(a.name) > 1
+            ORDER BY RANDOM() 
+            LIMIT 1
+        `;
         return albums[0] || null;
     }
 
     static async getMarketItems() {
         return await prisma.marketItem.findMany({
-            include: { album: { include: { artist: true } } }
+            include: { album: { include: { artist: true } } },
+            orderBy: { id: 'asc' }
         });
     }
 
@@ -312,6 +335,7 @@ export class AlbumGameService {
             include: { album: { include: { artist: true } } }
         });
         if (!item) return { success: false, msg: 'Item no longer in market.' };
+        if (item.isSold) return { success: false, msg: 'This album is already sold out!' };
 
         if (profile.vinylScraps < item.price) {
             return { success: false, msg: `You need **${item.price}** Vinyls! (You have ${profile.vinylScraps})` };
@@ -334,7 +358,10 @@ export class AlbumGameService {
                     rarity: item.rarity
                 }
             }),
-            prisma.marketItem.delete({ where: { id: marketId } }) // Remove from global market
+            prisma.marketItem.update({
+                where: { id: marketId },
+                data: { isSold: true }
+            })
         ]);
 
         return { success: true, msg: `Successfully bought **${item.album.artist.name} - ${item.album.name}**!` };
