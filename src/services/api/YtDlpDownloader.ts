@@ -11,20 +11,23 @@ export class YtDlpDownloader {
 
     static async downloadTrack(
         outputPath: string,
-        metadata: { name: string; artist: string; album: string; artworkUrl?: string }
+        metadata: { name: string; artist: string; album: string; artworkUrl?: string; durationMs?: number }
     ): Promise<string> {
         const query = `${metadata.artist} - ${metadata.name}`;
-        const searchQuery = `ytsearch1:${query} audio`;
+        
+        // 1. YouTube Music (Best quality/metadata)
+        // 2. YouTube Search
+        // 3. SoundCloud (with strict filters)
+        const searchStrategies = [
+            { name: 'YouTube Music', query: `ytsearch1:${query} official audio`, extractor: 'youtube' },
+            { name: 'YouTube', query: `ytsearch1:${query} audio`, extractor: 'youtube' },
+            { name: 'SoundCloud', query: `scsearch5:${query}`, extractor: 'soundcloud' }
+        ];
 
-        console.log(`📥 Searching YouTube: ${query}`);
-
-        // Try to find ffmpeg in common locations or use PATH
         const ffmpegCandidates = [
             process.env.FFMPEG_PATH,
             'C:\\tools\\ffmpeg\\ffmpeg.exe',
-            'C:\\tools\\ffmpeg\\bin\\ffmpeg.exe',
             '/usr/bin/ffmpeg',
-            '/usr/local/bin/ffmpeg',
             'ffmpeg'
         ];
 
@@ -39,41 +42,65 @@ export class YtDlpDownloader {
         const cookiesPath = path.join(process.cwd(), 'cookies.txt');
         const hasCookies = fs.existsSync(cookiesPath);
 
-        const cmd = [
-            'yt-dlp',
-            `"${searchQuery}"`,
-            '--format "bestaudio/best"',
-            '--extract-audio',
-            '--audio-format mp3',
-            '--audio-quality 0',
-            '--no-playlist',
-            '--no-warnings',
-            '--quiet',
-            '--no-progress',
-            hasCookies ? `--cookies "${cookiesPath}"` : '',
-            `--output "${outputPath}.%(ext)s"`,
-            `--ffmpeg-location "${resolvedFfmpeg}"`
-        ].join(' ');
+        let lastError = null;
 
-        try {
-            await execAsync(cmd, { timeout: 120_000 });
-        } catch (err: any) {
-            if (err.message.includes('Sign in to confirm')) {
-                throw new Error("YouTube blocked the request. Please provide a cookies.txt file in the root directory.");
+        for (const strategy of searchStrategies) {
+            console.log(`📥 Searching (${strategy.name}): ${query}`);
+
+            const filterParts = [];
+            
+            // Advanced Filters for SoundCloud/Search
+            if (strategy.extractor === 'soundcloud' || strategy.name === 'YouTube') {
+                // Reject remixes if original isn't one
+                const originalIsRemix = metadata.name.toLowerCase().includes('remix');
+                if (!originalIsRemix) {
+                    filterParts.push('title !~* "(remix|edit|bootleg|mashup|cover|tribute)"');
+                }
+
+                // Duration filter (within 20 seconds of original)
+                if (metadata.durationMs) {
+                    const durSec = Math.floor(metadata.durationMs / 1000);
+                    filterParts.push(`duration > ${durSec - 20} & duration < ${durSec + 20}`);
+                }
             }
-            if (err.message.includes('format is not available')) {
-                throw new Error("YouTube could not find a suitable audio format for this track.");
+
+            const matchFilter = filterParts.length > 0 ? `--match-filter "${filterParts.join(' & ')}"` : '';
+
+            const cmd = [
+                'yt-dlp',
+                `"${strategy.query}"`,
+                '--format "bestaudio/best"',
+                '--extract-audio',
+                '--audio-format mp3',
+                '--no-playlist',
+                '--no-warnings',
+                '--quiet',
+                '--no-progress',
+                '--add-header "Referer:https://www.google.com/"',
+                hasCookies ? `--cookies "${cookiesPath}"` : '',
+                matchFilter,
+                `--output "${outputPath}.%(ext)s"`,
+                `--ffmpeg-location "${resolvedFfmpeg}"`
+            ].join(' ');
+
+            try {
+                await execAsync(cmd, { timeout: 120_000 });
+                const finalPath = `${outputPath}.mp3`;
+                if (fs.existsSync(finalPath)) {
+                    await this.writeTags(finalPath, metadata);
+                    return finalPath;
+                }
+            } catch (err: any) {
+                lastError = err;
+                console.warn(`⚠️ ${strategy.name} attempt failed: ${err.message.split('\n')[0]}`);
+                continue;
             }
-            throw new Error(`yt-dlp failed: ${err.message}`);
         }
 
-        const finalPath = `${outputPath}.mp3`;
+        throw new Error(`Download failed after all strategies: ${lastError?.message}`);
+    }
 
-        if (!fs.existsSync(finalPath)) {
-            throw new Error(`Downloaded file not found at expected path: ${finalPath}`);
-        }
-
-        // Write ID3 tags
+    private static async writeTags(filePath: string, metadata: any) {
         const tags: any = {
             title: metadata.name,
             artist: metadata.artist,
@@ -82,7 +109,7 @@ export class YtDlpDownloader {
 
         if (metadata.artworkUrl) {
             try {
-                const art = await axios.get(metadata.artworkUrl, { responseType: 'arraybuffer' });
+                const art = await axios.get(metadata.artworkUrl, { responseType: 'arraybuffer', timeout: 10000 });
                 tags.image = {
                     mime: 'image/jpeg',
                     type: { id: 3, name: 'front cover' },
@@ -92,9 +119,7 @@ export class YtDlpDownloader {
             } catch (_) {}
         }
 
-        NodeID3.write(tags, finalPath);
-        console.log(`✅ Downloaded: ${metadata.name}`);
-
-        return finalPath;
+        NodeID3.write(tags, filePath);
+        console.log(`✅ Finalized: ${metadata.name}`);
     }
 }

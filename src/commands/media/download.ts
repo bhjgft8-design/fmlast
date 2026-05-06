@@ -53,7 +53,7 @@ export default class DownloadCommand extends BaseCommand {
             const albumMatch = link.match(/album\/([a-zA-Z0-9]+)/);
             const playlistMatch = link.match(/playlist\/([a-zA-Z0-9]+)/);
 
-            let tracks: { name: string; artist: string; artworkUrl?: string }[] = [];
+            let tracks: { name: string; artist: string; artworkUrl?: string; durationMs?: number }[] = [];
             let collectionName = "Download";
             let collectionArt: string | null = null;
 
@@ -64,7 +64,8 @@ export default class DownloadCommand extends BaseCommand {
                     tracks.push({
                         name: resolved.title,
                         artist: resolved.artist,
-                        artworkUrl: resolved.artworkUrl || undefined
+                        artworkUrl: resolved.artworkUrl || undefined,
+                        durationMs: resolved.durationMs
                     });
                     collectionName = resolved.title;
                     collectionArt = resolved.artworkUrl;
@@ -80,14 +81,16 @@ export default class DownloadCommand extends BaseCommand {
                     tracks = albumTracks.map(t => ({
                         name: t.name,
                         artist: t.artist,
-                        artworkUrl: collectionArt || undefined
+                        artworkUrl: collectionArt || undefined,
+                        durationMs: (t as any).durationMs
                     }));
                 }
             } else if (playlistMatch) {
                 const playlistTracks = await Spotify.getPlaylistTracks(playlistMatch[1]);
                 tracks = playlistTracks.map(t => ({
                     name: t.name,
-                    artist: t.artist
+                    artist: t.artist,
+                    durationMs: (t as any).durationMs
                 }));
                 collectionName = "Playlist";
             }
@@ -138,7 +141,8 @@ export default class DownloadCommand extends BaseCommand {
                         name: track.name,
                         artist: track.artist,
                         album: collectionName,
-                        artworkUrl: artworkUrl
+                        artworkUrl: artworkUrl,
+                        durationMs: track.durationMs
                     });
 
                     downloadedFiles.push(finalPath);

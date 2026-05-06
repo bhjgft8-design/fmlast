@@ -506,7 +506,8 @@ export class Spotify {
 
             return (data.items || []).map((t: any) => ({
                 name: t.name,
-                artist: t.artists?.[0]?.name || 'Unknown Artist'
+                artist: t.artists?.[0]?.name || 'Unknown Artist',
+                durationMs: t.duration_ms || 0
             }));
         } catch (err: any) {
             this.handleApiError(err);
@@ -571,7 +572,7 @@ export class Spotify {
                 headers: { Authorization: `Bearer ${token}` },
                 params: { 
                     limit: 100,
-                    fields: 'items(track(name,artists(name)))'
+                    fields: 'items(track(name,duration_ms,artists(name)))'
                 }
             });
 
@@ -579,7 +580,8 @@ export class Spotify {
                 .filter((i: any) => i.track)
                 .map((i: any) => ({
                     name: i.track.name,
-                    artist: i.track.artists?.[0]?.name || 'Unknown Artist'
+                    artist: i.track.artists?.[0]?.name || 'Unknown Artist',
+                    durationMs: i.track.duration_ms || 0
                 }));
         } catch (err: any) {
             this.handleApiError(err);
