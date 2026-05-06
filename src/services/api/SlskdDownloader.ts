@@ -39,9 +39,32 @@ export class SlskdDownloader {
         const searchId: string = search.id;
         console.log(`🔍 slskd search started: ${searchId}`);
 
-        await this.sleep(6000);
+        // Poll until search completes instead of fixed sleep
+        const MAX_SEARCH_WAIT = 30_000; // 30 seconds
+        const deadline = Date.now() + MAX_SEARCH_WAIT;
+        let results: any = null;
 
-        const { data: results } = await api.get(`/searches/${searchId}`);
+        while (Date.now() < deadline) {
+            await this.sleep(2000);
+            const { data } = await api.get(`/searches/${searchId}`);
+            
+            const fileCount = (data.responses ?? [])
+                .reduce((sum: number, r: any) => sum + (r.files?.length ?? 0), 0);
+            
+            console.log(`🔎 Search state: ${data.state} | responses: ${data.responses?.length ?? 0} | files: ${fileCount}`);
+
+            // Stop early if we have enough results
+            if (data.state === 'Completed' || fileCount >= 20) {
+                results = data;
+                break;
+            }
+
+            results = data; // keep last result in case we timeout
+        }
+
+        await api.delete(`/searches/${searchId}`).catch(() => {});
+
+        if (!results) throw new Error(`Search timed out for: ${query}`);
 
         const files: SlskFile[] = [];
         for (const response of results.responses ?? []) {
@@ -55,8 +78,7 @@ export class SlskdDownloader {
             }
         }
 
-        await api.delete(`/searches/${searchId}`).catch(() => {});
-
+        console.log(`📦 Total files found: ${files.length}`);
         return files;
     }
 
