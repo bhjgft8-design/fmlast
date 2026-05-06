@@ -42,6 +42,7 @@ export class YtDlpDownloader {
         const cmd = [
             'yt-dlp',
             `"${searchQuery}"`,
+            '--format "bestaudio/best"',
             '--extract-audio',
             '--audio-format mp3',
             '--audio-quality 0',
@@ -50,7 +51,6 @@ export class YtDlpDownloader {
             '--quiet',
             '--no-progress',
             hasCookies ? `--cookies "${cookiesPath}"` : '',
-            '--extractor-args "youtube:player_client=android,web"',
             `--output "${outputPath}.%(ext)s"`,
             `--ffmpeg-location "${resolvedFfmpeg}"`
         ].join(' ');
@@ -60,6 +60,9 @@ export class YtDlpDownloader {
         } catch (err: any) {
             if (err.message.includes('Sign in to confirm')) {
                 throw new Error("YouTube blocked the request. Please provide a cookies.txt file in the root directory.");
+            }
+            if (err.message.includes('format is not available')) {
+                throw new Error("YouTube could not find a suitable audio format for this track.");
             }
             throw new Error(`yt-dlp failed: ${err.message}`);
         }
