@@ -50,4 +50,10 @@ export const config = {
         POOL_SIZE: 1, // Reduced for Railway RAM savings
         WARMUP: true,
     },
+    
+    
+    
+    COBALT_URL: process.env.COBALT_URL,
+
+
 };
