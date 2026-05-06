@@ -1,10 +1,6 @@
 import axios from 'axios';
 import fs from 'fs';
 import NodeID3 from 'node-id3';
-import { exec } from 'child_process';
-import { promisify } from 'util';
-
-const execAsync = promisify(exec);
 
 export class CobaltDownloader {
 
@@ -37,25 +33,29 @@ export class CobaltDownloader {
         } catch (err: any) {
             if (err.response) {
                 console.error('❌ RapidAPI Error Details:', JSON.stringify(err.response.data, null, 2));
-                throw new Error(`RapidAPI 403: ${err.response.data.message || 'Forbidden. Ensure you are subscribed to "Spotify Downloader" on RapidAPI.'}`);
+                throw new Error(`RapidAPI 403: ${err.response.data.message || 'Forbidden. Ensure you are subscribed.'}`);
             }
             throw err;
         }
         
-        console.log('📡 Spotify API Response:', JSON.stringify(apiRes, null, 2));
-
         const downloadLink = apiRes.data?.downloadLink || apiRes.link || apiRes.data?.url;
 
         if (!downloadLink) {
+            console.log('📡 Full API Response (Debug):', JSON.stringify(apiRes, null, 2));
             throw new Error(`API Error: No download link in response. Status: ${apiRes.success}`);
         }
 
         console.log(`✅ API resolved link. Downloading binary...`);
 
-        // 2. Download via curl
+        // 2. Download via axios (Standard binary download)
         try {
-            const curlCmd = `curl -L -s -o "${outputPath}" -A "Mozilla/5.0" "${downloadLink}"`;
-            await execAsync(curlCmd, { timeout: 120_000 });
+            const response = await axios.get(downloadLink, {
+                responseType: 'arraybuffer',
+                timeout: 300_000, // 5 minutes
+                maxRedirects: 10,
+                headers: { 'User-Agent': 'Mozilla/5.0' }
+            });
+            fs.writeFileSync(outputPath, Buffer.from(response.data));
         } catch (err: any) {
             throw new Error(`Binary download failed: ${err.message}`);
         }
