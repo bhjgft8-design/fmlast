@@ -13,14 +13,18 @@ export class CobaltDownloader {
             throw new Error("COBALT_URL is not set in environment variables.");
         }
 
-        console.log(`📥 Requesting Cobalt stream for: ${metadata.name}`);
+        // Ensure URL doesn't have a trailing slash so we can add it safely
+        const baseUrl = config.COBALT_URL.endsWith('/') ? config.COBALT_URL : `${config.COBALT_URL}/`;
 
-        // 1. Get stream URL from Cobalt
-        const { data: cobaltRes } = await axios.post(`${config.COBALT_URL}/api/json`, {
+        console.log(`📥 Requesting Cobalt v10 stream for: ${metadata.name}`);
+
+        // 1. Get stream URL from Cobalt (v10 uses root POST /)
+        const { data: cobaltRes } = await axios.post(baseUrl, {
             url: metadata.youtubeUrl,
-            downloadMode: 'audio',
+            videoQuality: '1080',
             audioFormat: 'mp3',
-            audioBitrate: '320'
+            downloadMode: 'audio',
+            filenameStyle: 'basic'
         }, {
             headers: {
                 'Accept': 'application/json',
@@ -28,13 +32,14 @@ export class CobaltDownloader {
             }
         });
 
-        if (cobaltRes.status === 'error') {
-            throw new Error(`Cobalt Error: ${cobaltRes.text}`);
+        // Cobalt v10 error handling
+        if (cobaltRes.status === 'error' || cobaltRes.status === 'rate-limit') {
+            throw new Error(`Cobalt Error: ${cobaltRes.text || 'Unknown Error'}`);
         }
 
         const streamUrl = cobaltRes.url;
         if (!streamUrl) {
-            throw new Error("Cobalt failed to return a stream URL.");
+            throw new Error(`Cobalt failed to return a stream URL. Status: ${cobaltRes.status}`);
         }
 
         // 2. Download the binary
@@ -66,7 +71,7 @@ export class CobaltDownloader {
         }
 
         NodeID3.write(tags, outputPath);
-        console.log(`✅ Downloaded and Tagged: ${metadata.name}`);
+        console.log(`✅ Finalized via Cobalt: ${metadata.name}`);
 
         return outputPath;
     }
