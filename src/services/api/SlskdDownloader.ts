@@ -4,9 +4,9 @@ import path from 'path';
 import NodeID3 from 'node-id3';
 import { config } from '../../../config';
 
-const SLSKD_URL = config.SLSKD_URL || 'http://localhost:5030';
-const SLSKD_API_KEY = config.SLSKD_API_KEY || '';
-const SLSKD_DOWNLOADS_DIR = config.SLSKD_DOWNLOADS_DIR || '/downloads';
+const SLSKD_URL = process.env.SLSKD_URL || 'http://localhost:5030';
+const SLSKD_API_KEY = process.env.SLSKD_API_KEY || '';
+const SLSKD_DOWNLOADS_DIR = process.env.SLSKD_DOWNLOADS_DIR || '/downloads';
 
 const PREFERRED_FORMATS = ['.flac', '.mp3', '.ogg', '.m4a'];
 const MAX_WAIT_MS = 120_000;   // 2 min total
@@ -27,6 +27,9 @@ interface SlskFile {
 export class SlskdDownloader {
 
     private static async search(query: string): Promise<SlskFile[]> {
+        if (!SLSKD_API_KEY) {
+            throw new Error('SLSKD_API_KEY is not set. Check your Railway environment variables.');
+        }
         const { data: search } = await api.post('/searches', {
             searchText: query,
             fileLimit: 100,
