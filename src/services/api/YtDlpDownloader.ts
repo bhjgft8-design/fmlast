@@ -36,6 +36,9 @@ export class YtDlpDownloader {
             }
         }
 
+        const cookiesPath = path.join(process.cwd(), 'cookies.txt');
+        const hasCookies = fs.existsSync(cookiesPath);
+
         const cmd = [
             'yt-dlp',
             `"${searchQuery}"`,
@@ -46,6 +49,8 @@ export class YtDlpDownloader {
             '--no-warnings',
             '--quiet',
             '--no-progress',
+            hasCookies ? `--cookies "${cookiesPath}"` : '',
+            '--extractor-args "youtube:player_client=android,web"',
             `--output "${outputPath}.%(ext)s"`,
             `--ffmpeg-location "${resolvedFfmpeg}"`
         ].join(' ');
@@ -53,6 +58,9 @@ export class YtDlpDownloader {
         try {
             await execAsync(cmd, { timeout: 120_000 });
         } catch (err: any) {
+            if (err.message.includes('Sign in to confirm')) {
+                throw new Error("YouTube blocked the request. Please provide a cookies.txt file in the root directory.");
+            }
             throw new Error(`yt-dlp failed: ${err.message}`);
         }
 
