@@ -78,8 +78,8 @@ export default class WhoKnowsCommand extends BaseCommand {
             return isSlash ? interactionOrMessage.editReply(msg) : interactionOrMessage.reply(msg);
         }
 
-        // Fire & Forget: Background sync their local DB if > 15 mins since last
-        triggerDeltaSync(targetUserId);
+        // Wait for background sync so numbers are up to date
+        await triggerDeltaSync(targetUserId, false, true);
 
         if (artistName) {
             // Already resolved from link, skip Last.fm search

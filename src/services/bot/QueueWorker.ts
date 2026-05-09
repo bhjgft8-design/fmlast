@@ -1,4 +1,4 @@
-import { Queue, Worker, Job } from 'bullmq';
+import { Queue, Worker, Job, QueueEvents } from 'bullmq';
 import { prisma, pool } from '../../database/client';
 import { Prisma } from '@prisma/client';
 import { LastFM } from '../api/LastFM';
@@ -76,6 +76,10 @@ export const deltaQueue = REDIS_URL ? new Queue('user-index-delta', {
     connection: new IORedis(REDIS_URL, connectionConfig)
 }) : null;
 
+export const deltaQueueEvents = REDIS_URL ? new QueueEvents('user-index-delta', {
+    connection: new IORedis(REDIS_URL, connectionConfig)
+}) : null;
+
 export const fullQueue = REDIS_URL ? new Queue('user-index-full', {
     connection: new IORedis(REDIS_URL, connectionConfig)
 }) : null;
@@ -89,7 +93,7 @@ interface IndexJobData {
     jobId?: string;
 }
 
-export async function triggerDeltaSync(discordId: string, force = false) {
+export async function triggerDeltaSync(discordId: string, force = false, waitForCompletion = false) {
     if (!deltaQueue) return;
     try {
         const user = await prisma.user.findUnique({ where: { discordId } });
@@ -104,11 +108,22 @@ export async function triggerDeltaSync(discordId: string, force = false) {
         settings.lastSyncExecuted = now;
         await prisma.user.update({ where: { discordId }, data: { settings } });
 
-        await deltaQueue.add(`${force ? 'force-' : ''}delta-${discordId}`, { discordId, type: 'DELTA_SYNC' }, {
+        const job = await deltaQueue.add(`${force ? 'force-' : ''}delta-${discordId}`, { discordId, type: 'DELTA_SYNC' }, {
             jobId: `delta-${discordId}`,
             removeOnComplete: true,
             removeOnFail: true
         });
+
+        if (waitForCompletion && deltaQueueEvents && job) {
+            try {
+                await Promise.race([
+                    job.waitUntilFinished(deltaQueueEvents),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Sync wait timeout')), 10000))
+                ]);
+            } catch (err) {
+                console.error(`Delta Sync Wait Failed for ${discordId}:`, err);
+            }
+        }
     } catch (e) {
         console.error("Delta Sync Trigger Failed:", e);
     }
@@ -656,7 +671,7 @@ async function upsertAggregates(userId: string, artists: Map<string, any>, track
                 const artistId = await IdResolutionService.getArtistId(d.name);
                 operations.push(prisma.$executeRaw`INSERT INTO user_artists (id, user_id, artist_id, artist_name, playcount) VALUES (${'ar_'+Math.random().toString(36).substring(2)}, ${userId}, ${artistId}, ${d.name}, ${d.count}) ON CONFLICT (user_id, artist_name) DO UPDATE SET artist_id = EXCLUDED.artist_id, playcount = user_artists.playcount + ${d.count}`);
             }
-            await prisma.$transaction(operations);
+            await Promise.all(operations);
         }
         
         const trackList = Array.from(tracks.values());
@@ -668,7 +683,7 @@ async function upsertAggregates(userId: string, artists: Map<string, any>, track
                 const trackId = await IdResolutionService.getTrackId(artistId, d.trackName);
                 operations.push(prisma.$executeRaw`INSERT INTO user_tracks (id, user_id, artist_id, track_id, artist_name, track_name, playcount) VALUES (${'tr_'+Math.random().toString(36).substring(2)}, ${userId}, ${artistId}, ${trackId}, ${d.artistName}, ${d.trackName}, ${d.count}) ON CONFLICT (user_id, artist_name, track_name) DO UPDATE SET artist_id = EXCLUDED.artist_id, track_id = EXCLUDED.track_id, playcount = user_tracks.playcount + ${d.count}`);
             }
-            await prisma.$transaction(operations);
+            await Promise.all(operations);
         }
 
         const albumList = Array.from(albums.values());
@@ -680,7 +695,7 @@ async function upsertAggregates(userId: string, artists: Map<string, any>, track
                 const albumId = await IdResolutionService.getAlbumId(artistId, d.albumName);
                 operations.push(prisma.$executeRaw`INSERT INTO user_albums (id, user_id, artist_id, album_id, artist_name, album_name, playcount) VALUES (${'al_'+Math.random().toString(36).substring(2)}, ${userId}, ${artistId}, ${albumId}, ${d.artistName}, ${d.albumName}, ${d.count}) ON CONFLICT (user_id, artist_name, album_name) DO UPDATE SET artist_id = EXCLUDED.artist_id, album_id = EXCLUDED.album_id, playcount = user_albums.playcount + ${d.count}`);
             }
-            await prisma.$transaction(operations);
+            await Promise.all(operations);
         }
     }
 }

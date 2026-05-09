@@ -10,6 +10,7 @@ import { IdResolutionService } from '../../services/bot/IdResolutionService';
 import { LastFM } from '../../services/api/LastFM';
 import { TrackResolverService } from '../../services/api/TrackResolverService';
 import { SettingService } from '../../services/bot/SettingService';
+import { triggerDeltaSync } from '../../services/bot/QueueWorker';
 
 export default class GlobalWhoKnowsTrackCommand extends BaseCommand {
     name = 'gwkt';
@@ -74,6 +75,9 @@ export default class GlobalWhoKnowsTrackCommand extends BaseCommand {
         else if (!isSlash) await interactionOrMessage.channel.sendTyping();
 
         try {
+            // Wait for background sync so numbers are up to date
+            await triggerDeltaSync(authorId, false, true);
+
             // 1. Resolve Artist ID and Track ID
             const artistId = artistName ? await IdResolutionService.getArtistId(artistName) : '';
             if (!artistId && artistName) {

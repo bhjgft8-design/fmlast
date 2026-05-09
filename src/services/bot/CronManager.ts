@@ -170,7 +170,10 @@ async function handleSyncStaleUsers(): Promise<void> {
         return lastSync < staleThreshold && lastUsed >= activeThreshold;
     });
 
-    if (staleUsers.length === 0) return;
+    if (staleUsers.length === 0) {
+        LoggerService.info('Stale user sync: 0 users qualify.', 'CronManager');
+        return;
+    }
 
     LoggerService.info(`Syncing ${staleUsers.length} stale user(s)...`, 'CronManager');
 
@@ -191,6 +194,8 @@ async function handleSyncStaleUsers(): Promise<void> {
 async function handleBackfillDurations(): Promise<void> {
     const healthy = await LastfmHealthTracker.isHealthy();
     if (!healthy) return;
+
+    LoggerService.info('Running track duration backfill...', 'CronManager');
 
     // Get users who have tracks without durations
     const usersWithMissing = await prisma.userTrack.groupBy({
@@ -216,12 +221,11 @@ async function handleBackfillDurations(): Promise<void> {
                 const info = await LastFM.getTrackInfo(track.artistName, track.trackName, user.lastfmUsername, user.lastfmSessionKey);
                 let dur = parseInt(info?.duration || '0', 10);
                 if (dur > 0) dur = Math.floor(dur / 1000);
-                if (dur > 30) {
-                    await prisma.userTrack.update({
-                        where: { id: track.id },
-                        data: { duration: dur },
-                    });
-                }
+                
+                await prisma.userTrack.update({
+                    where: { id: track.id },
+                    data: { duration: dur },
+                });
             } catch { }
             await new Promise(r => setTimeout(r, 200));
         }
@@ -262,7 +266,10 @@ async function handleGlobalMetadataEnrichment(): Promise<void> {
         take: 20
     });
 
-    if (staleArtists.length === 0) return;
+    if (staleArtists.length === 0) {
+        LoggerService.info('Global metadata enrichment: 0 stale artists found.', 'CronManager');
+        return;
+    }
 
     LoggerService.info(`Enriching metadata for ${staleArtists.length} artists...`, 'CronManager');
 
@@ -274,7 +281,7 @@ async function handleGlobalMetadataEnrichment(): Promise<void> {
                 await prisma.artist.update({
                     where: { id: artist.id },
                     data: {
-                        countryCode: mbInfo.metadata.countryCode || null,
+                        countryCode: mbInfo.metadata.countryCode || 'XX',
                         gender: mbInfo.metadata.gender || null,
                         type: mbInfo.metadata.type || null,
                         updatedAt: new Date()
@@ -289,6 +296,11 @@ async function handleGlobalMetadataEnrichment(): Promise<void> {
                     }));
                     await prisma.artistLink.createMany({ data: links, skipDuplicates: true });
                 }
+            } else {
+                await prisma.artist.update({
+                    where: { id: artist.id },
+                    data: { countryCode: 'XX', updatedAt: new Date() }
+                });
             }
 
             // 2. Last.fm Tag Enrichment (Genre)

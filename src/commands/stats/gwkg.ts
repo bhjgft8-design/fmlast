@@ -8,6 +8,7 @@ import { SlashCommandBuilder,
 import { ComponentsV2 } from '../../utils/ComponentsV2';
 import { LastFM } from '../../services/api/LastFM';
 import { SettingService } from '../../services/bot/SettingService';
+import { triggerDeltaSync } from '../../services/bot/QueueWorker';
 
 export default class GlobalWhoKnowsGenreCommand extends BaseCommand {
     name = 'gwkg';
@@ -61,6 +62,9 @@ export default class GlobalWhoKnowsGenreCommand extends BaseCommand {
         if (isSlash && !interactionOrMessage.deferred) await interactionOrMessage.deferReply();
 
         try {
+            // Wait for background sync so numbers are up to date
+            await triggerDeltaSync(authorId, false, true);
+
             // 1. Fetch Global Leaders for Genre
             // Using raw query for the 4-way join + aggregation
             const leaders: any[] = await prisma.$queryRaw`

@@ -33,7 +33,6 @@ const SPOTIFY_CLIENT_SECRET = process.env.SPOTIFY_CLIENT_SECRET!;
 const FM_COLOR = 0xd51007;
 const MARKET = "EG";
 
-// Removed redundant fetch functions: Artwork utility handles this now with Redis caching.
 
 
 
@@ -92,11 +91,10 @@ export default class CoverCommand extends BaseCommand {
     }
     const replyMethod = isPrefix ? "reply" : "editReply";
 
-    // ── 0. GLOBAL RATE LIMIT ──
     const allowed = await RateLimitService.checkCommand(interactionOrMessage.member?.id || interactionOrMessage.author?.id);
     if (!allowed) {
-        const msg = "⚠️ You are sending commands too fast! Please slow down.";
-        return isSlash ? interactionOrMessage.editReply(msg) : interactionOrMessage.channel.send(msg);
+      const msg = "⚠️ You are sending commands too fast! Please slow down.";
+      return isSlash ? interactionOrMessage.editReply(msg) : interactionOrMessage.channel.send(msg);
     }
 
     let artist = "";
@@ -105,13 +103,13 @@ export default class CoverCommand extends BaseCommand {
     let finalImageUrl: string | null = null;
     let finalSpotifyUrl: string | null = null;
     let coverSource: string = 'unknown';
-    
+
     let targetUsername: string;
     let sessionKey: string;
 
     try {
-      const targetUser = isSlash 
-        ? (interactionOrMessage.options.getUser("user") || interactionOrMessage.user) 
+      const targetUser = isSlash
+        ? (interactionOrMessage.options.getUser("user") || interactionOrMessage.user)
         : (interactionOrMessage.mentions?.users?.first() || interactionOrMessage.author);
 
       let trackOpt = isSlash ? interactionOrMessage.options.getString("track")?.trim() : undefined;
@@ -147,7 +145,6 @@ export default class CoverCommand extends BaseCommand {
       targetUsername = dbUser.lastfmUsername;
       sessionKey = dbUser.lastfmSessionKey;
 
-      // Fire & Forget background sync
       triggerDeltaSync(targetUser.id);
 
       let resolvedData;
@@ -184,77 +181,71 @@ export default class CoverCommand extends BaseCommand {
         await interactionOrMessage[replyMethod]({ content: '⚠️ No album artwork found.' });
         return;
       }
-      // ── COVER SOURCE SUMMARY LOG (Consolidated) ──
       console.log(`[cover] ✅ ${artist} - ${trackName} | Source: ${coverSource}`);
 
       let cdnUrl: string | null = null;
       let artistScrobbles = null;
       let trackScrobbles = null;
 
-      // ── 0. FETCH USER SCROBBLES (If username available) ──
       if (targetUsername) {
-          try {
-              const [aInfo, tInfo] = await Promise.all([
-                  LastFM.getArtistInfo(artist, targetUsername, sessionKey),
-                  LastFM.getTrackInfo(artist, trackName, targetUsername, sessionKey)
-              ]);
-              artistScrobbles = aInfo?.stats?.userplaycount || aInfo?.userplaycount || null;
-              trackScrobbles = tInfo?.userplaycount || null;
-          } catch (e: any) {
-              console.warn(`[cover] Failed to fetch scrobbles for ${targetUsername}:`, e.message);
-          }
+        try {
+          const [aInfo, tInfo] = await Promise.all([
+            LastFM.getArtistInfo(artist, targetUsername, sessionKey),
+            LastFM.getTrackInfo(artist, trackName, targetUsername, sessionKey)
+          ]);
+          artistScrobbles = aInfo?.stats?.userplaycount || aInfo?.userplaycount || null;
+          trackScrobbles = tInfo?.userplaycount || null;
+        } catch (e: any) {
+          console.warn(`[cover] Failed to fetch scrobbles for ${targetUsername}:`, e.message);
+        }
       }
 
-      // ── 1. CHECK RENDER CACHE (Personalized) ──
       const userColorHex = (dbUser?.settings as any)?.embedColor || "#d51007";
       const userColorInt = parseInt(userColorHex.replace('#', ''), 16);
 
       cdnUrl = await RenderCacheService.getCachedImage('track_info', artist, trackName, targetUsername || undefined);
 
       if (!cdnUrl) {
-          const templateData = {
-              coverUrl: finalImageUrl,
-              artistAvatarUrl: artistAvatarUrl,
-              trackName: trackName,
-              artistName: artist,
-              albumName: album,
-              badgeText: coverSource.toUpperCase(),
-              accentColor: userColorHex,
-              artistScrobbles: artistScrobbles ? Number(artistScrobbles).toLocaleString() : null,
-              trackScrobbles: trackScrobbles ? Number(trackScrobbles).toLocaleString() : null,
-              hasStats: !!(artistScrobbles || trackScrobbles)
-          };
+        const templateData = {
+          coverUrl: finalImageUrl,
+          artistAvatarUrl: artistAvatarUrl,
+          trackName: trackName,
+          artistName: artist,
+          albumName: album,
+          badgeText: coverSource.toUpperCase(),
+          accentColor: userColorHex,
+          artistScrobbles: artistScrobbles ? Number(artistScrobbles).toLocaleString() : null,
+          trackScrobbles: trackScrobbles ? Number(trackScrobbles).toLocaleString() : null,
+          hasStats: !!(artistScrobbles || trackScrobbles)
+        };
 
-          const renderBuffer = await PuppeteerService.render('track_info', templateData, { width: 1080, height: 1080 });
+        const renderBuffer = await PuppeteerService.render('track_info', templateData, { width: 1080, height: 1080 });
 
-          const stagingChannelId = config.CHART_STAGING_CHANNEL_ID;
-          if (stagingChannelId && interactionOrMessage.client) {
-            try {
-              const stagingChannel = await interactionOrMessage.client.channels.fetch(stagingChannelId) as TextChannel | null;
-              if (stagingChannel && (stagingChannel.type === ChannelType.GuildText || stagingChannel.type === ChannelType.PublicThread || stagingChannel.type === ChannelType.PrivateThread)) {
-                const attachment = new AttachmentBuilder(renderBuffer, {
-                  name: `cover-${artist.replace(/\s+/g, '_')}-${(album !== "Unknown Album" ? album : trackName).replace(/\s+/g, '_')}.webp`
-                });
-                const stagingMessage = await (stagingChannel as TextChannel).send({ files: [attachment] });
-                cdnUrl = stagingMessage.attachments.first()?.url || null;
+        const stagingChannelId = config.CHART_STAGING_CHANNEL_ID;
+        if (stagingChannelId && interactionOrMessage.client) {
+          try {
+            const stagingChannel = await interactionOrMessage.client.channels.fetch(stagingChannelId) as TextChannel | null;
+            if (stagingChannel && (stagingChannel.type === ChannelType.GuildText || stagingChannel.type === ChannelType.PublicThread || stagingChannel.type === ChannelType.PrivateThread)) {
+              const attachment = new AttachmentBuilder(renderBuffer, {
+                name: `cover-${artist.replace(/\s+/g, '_')}-${(album !== "Unknown Album" ? album : trackName).replace(/\s+/g, '_')}.webp`
+              });
+              const stagingMessage = await (stagingChannel as TextChannel).send({ files: [attachment] });
+              cdnUrl = stagingMessage.attachments.first()?.url || null;
 
-                // Cache the successful render
-                if (cdnUrl) {
-                    await RenderCacheService.setCachedImage('track_info', artist, trackName, cdnUrl, targetUsername || undefined);
-                }
-
-                // Deleting after 24 hours to keep the CDN link alive for a while
-                setTimeout(() => stagingMessage.delete().catch(() => { }), 86400000);
+              if (cdnUrl) {
+                await RenderCacheService.setCachedImage('track_info', artist, trackName, cdnUrl, targetUsername || undefined);
               }
-            } catch (e: any) {
-              console.warn('⚠️ Staging failed:', e);
+
+              setTimeout(() => stagingMessage.delete().catch(() => { }), 86400000);
             }
+          } catch (e: any) {
+            console.warn('⚠️ Staging failed:', e);
           }
+        }
       }
 
       if (!cdnUrl) throw new Error('Could not upload cover to Discord CDN.');
 
-      // Fetch platform links (Already resolved via UTR)
       const trackUrlLastfm = trackName !== "Unknown Track" ? `https://www.last.fm/music/${encodeURIComponent(artist)}/_/${encodeURIComponent(trackName)}` : null;
 
       const buttons: any[] = [];
@@ -272,20 +263,19 @@ export default class CoverCommand extends BaseCommand {
       if (buttons.length > 0) {
         payload.addRow(buttons);
       }
-      
+
       const finalPayload = payload.build();
 
-      // Removed artificial 2-second delay
-      
+
       await interactionOrMessage[replyMethod](finalPayload);
 
     } catch (err: any) {
       console.error("🔥 Error fetching album cover:", err);
       const errorMsg = "❌ " + (err.message || "Failed to fetch album cover.");
       if (isSlash && (interactionOrMessage.replied || interactionOrMessage.deferred)) {
-        await interactionOrMessage.editReply({ content: errorMsg, embeds: [], files: [], components: [] }).catch(() => {});
+        await interactionOrMessage.editReply({ content: errorMsg, embeds: [], files: [], components: [] }).catch(() => { });
       } else {
-        await interactionOrMessage.reply({ content: errorMsg, ephemeral: true }).catch(() => {});
+        await interactionOrMessage.reply({ content: errorMsg, ephemeral: true }).catch(() => { });
       }
     }
   }

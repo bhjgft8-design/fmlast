@@ -9,6 +9,7 @@ import { ComponentsV2 } from '../../utils/ComponentsV2';
 import { IdResolutionService } from '../../services/bot/IdResolutionService';
 import { LastFM } from '../../services/api/LastFM';
 import { SettingService } from '../../services/bot/SettingService';
+import { triggerDeltaSync } from '../../services/bot/QueueWorker';
 
 export default class GlobalWhoKnowsCommand extends BaseCommand {
     name = 'gwk';
@@ -56,6 +57,9 @@ export default class GlobalWhoKnowsCommand extends BaseCommand {
         if (isSlash && !interactionOrMessage.deferred) await interactionOrMessage.deferReply();
 
         try {
+            // Wait for background sync so numbers are up to date
+            await triggerDeltaSync(authorId, false, true);
+
             // 1. Resolve Artist ID
             const artistId = await IdResolutionService.getArtistId(artistName);
             

@@ -72,7 +72,7 @@ export default class WhoKnowsAlbumCommand extends BaseCommand {
         }
 
         // Fire & Forget background sync
-        triggerDeltaSync(targetUserId);
+        await triggerDeltaSync(targetUserId, false, true);
 
         if (artistName && albumName) {
             // Already resolved from link, skip Last.fm search

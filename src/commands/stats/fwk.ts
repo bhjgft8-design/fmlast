@@ -61,7 +61,7 @@ export default class FriendWhoKnowsCommand extends BaseCommand {
         }
 
         // Fire & Forget: Background sync
-        triggerDeltaSync(authorId);
+        await triggerDeltaSync(authorId, false, true);
 
         if (!artistName) {
             try {

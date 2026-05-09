@@ -64,7 +64,7 @@ export default class FriendWhoKnowsTrackCommand extends BaseCommand {
             return isSlash ? interactionOrMessage.editReply(msg) : interactionOrMessage.reply(msg);
         }
 
-        triggerDeltaSync(authorId);
+        await triggerDeltaSync(authorId, false, true);
 
         if (artistName && trackName) {
             // Already resolved from link, skip Last.fm search
