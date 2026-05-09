@@ -406,9 +406,6 @@ async function handleIndexing(job: Job<IndexJobData>) {
                 else pageData = await LastFM.getRecentTracksPaginated(username, 1000, p, sessionKey, !!sessionKey, fromTimestamp);
                 
                 if (pageData.tracks) {
-                    if (pageData.tracks.length > 0) {
-                        console.log(`[Queue] Processing ${pageData.tracks.length} tracks for page ${p} (${username})`);
-                    }
                     processPage(pageData.tracks);
                 }
                 break;

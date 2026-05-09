@@ -530,7 +530,6 @@ export class AlbumGameService {
      */
     static async processSyncResults(userId: string, artistCounts: Map<string, {name: string, count: number}>, albumCounts: Map<string, {artistName: string, albumName: string, count: number}>) {
         if (artistCounts.size === 0) return;
-        LoggerService.info(`[RPG] Processing sync results for user ${userId}. Artists found: ${artistCounts.size}`, 'RPG');
         
         // 1. Update Raid Bosses (only for added scrobbles)
         for (const [key, data] of artistCounts.entries()) {
@@ -539,7 +538,6 @@ export class AlbumGameService {
             // Resolve artist ID
             const artist = await prisma.artist.findFirst({ where: { name: { equals: data.name, mode: 'insensitive' } } });
             if (artist) {
-                LoggerService.info(`[RPG] Found artist ${artist.name} with ${data.count} new scrobbles`, 'RPG');
                 await this.checkAndApplyRaidBoss(userId, artist.id, data.count);
                 
                 // 2. Update Artist Mastery XP
