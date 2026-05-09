@@ -1,6 +1,11 @@
 import { prisma } from '../../database/client';
 import { TrackResolverService } from '../api/TrackResolverService';
+import { ComponentsV2 } from '../../utils/ComponentsV2';
+import { client } from '../../index';
+import { TextChannel, EmbedBuilder, AttachmentBuilder } from 'discord.js';
 import { CacheService } from '../bot/CacheService';
+import { LoggerService } from '../bot/LoggerService';
+import { AlbumRenderService } from '../bot/AlbumRenderService';
 import { Spotify } from '../api/Spotify';
 
 export enum AlbumRarity {
@@ -63,7 +68,8 @@ export class AlbumGameService {
                 
                 let image = '';
                 try {
-                    image = await Spotify.getArtistCover(artist.artistName) || '';
+                    const res = await TrackResolverService.resolveArtist(artist.artistName);
+                    image = res.avatarUrl || '';
                 } catch { }
                 
                 if (image) {
@@ -155,7 +161,14 @@ export class AlbumGameService {
                 
             } else {
                 await prisma.userArtistCollection.upsert({
-                    where: { userId_artistId: { userId: dbUser.id, artistId: itemId } },
+                    where: { 
+                        userId_artistId_rarity_variant: { 
+                            userId: dbUser.id, 
+                            artistId: itemId, 
+                            rarity, 
+                            variant 
+                        } 
+                    },
                     create: { userId: dbUser.id, artistId: itemId, rarity, variant },
                     update: {}
                 });
@@ -168,6 +181,7 @@ export class AlbumGameService {
             if (rarity === AlbumRarity.LEGENDARY) value = 1000;
             if (variant === 'HOLOGRAPHIC') value *= 10;
             if (variant === 'ERROR') value *= 50;
+            if (variant === 'GLITCH') value *= 100;
 
             await prisma.userGameProfile.upsert({
                 where: { userId: dbUser.id },
@@ -204,6 +218,27 @@ export class AlbumGameService {
                 album: {
                     include: { artist: true }
                 }
+            },
+            orderBy: { claimedAt: 'desc' },
+            skip: page * limit,
+            take: limit
+        });
+
+        return { items, count };
+    }
+
+    /**
+     * RPG: Get a user's artist collection with pagination.
+     */
+    static async getArtistCollection(discordId: string, page = 0, limit = 1) {
+        const dbUser = await prisma.user.findUnique({ where: { discordId } });
+        if (!dbUser) return null;
+
+        const count = await prisma.userArtistCollection.count({ where: { userId: dbUser.id } });
+        const items = await prisma.userArtistCollection.findMany({
+            where: { userId: dbUser.id },
+            include: {
+                artist: true
             },
             orderBy: { claimedAt: 'desc' },
             skip: page * limit,
@@ -268,8 +303,8 @@ export class AlbumGameService {
             });
             return !!collection;
         } else {
-            const collection = await prisma.userArtistCollection.findUnique({
-                where: { userId_artistId: { userId: user.id, artistId: itemId } }
+            const collection = await prisma.userArtistCollection.findFirst({
+                where: { userId: user.id, artistId: itemId }
             });
             return !!collection;
         }
@@ -309,6 +344,175 @@ export class AlbumGameService {
     }
 
     /**
+     * RPG: Check and apply evolutions based on Mastery XP.
+     */
+    static async checkAndApplyEvolutions(userId: string, type: 'ALBUM' | 'ARTIST', itemId: string, xpIncrement: number) {
+        if (type === 'ALBUM') {
+            const collection = await prisma.userAlbumCollection.findUnique({
+                where: { userId_albumId: { userId, albumId: itemId } }
+            });
+            if (!collection) return;
+
+            const newXp = collection.masteryXp + xpIncrement;
+            let newVariant = collection.variant;
+            let newPolish = collection.polishLevel;
+            let upgraded = false;
+
+            if (newXp >= 1000 && newVariant !== 'GLITCH') {
+                newVariant = 'GLITCH';
+                upgraded = true;
+            } else if (newXp >= 500 && newVariant === 'NORMAL') {
+                newVariant = 'HOLOGRAPHIC';
+                upgraded = true;
+            } else if (newXp >= 300 && newPolish < 3) {
+                newPolish = 3;
+                upgraded = true;
+            } else if (newXp >= 150 && newPolish < 2) {
+                newPolish = 2;
+                upgraded = true;
+            } else if (newXp >= 50 && newPolish < 1) {
+                newPolish = 1;
+                upgraded = true;
+            }
+
+            await prisma.userAlbumCollection.update({
+                where: { id: collection.id },
+                data: { masteryXp: newXp, variant: newVariant, polishLevel: newPolish }
+            });
+            
+            if (upgraded) {
+                // optionally we could send a DM or log it
+            }
+        } else {
+        const collection = await prisma.userArtistCollection.findFirst({
+            where: { userId, artistId: itemId }
+        });
+            if (!collection) return;
+
+            const newXp = collection.masteryXp + xpIncrement;
+            let newVariant = collection.variant;
+            let newPolish = collection.polishLevel;
+            let upgraded = false;
+
+            if (newXp >= 1000 && newVariant !== 'GLITCH') {
+                newVariant = 'GLITCH';
+                upgraded = true;
+            } else if (newXp >= 500 && newVariant === 'HOLOGRAPHIC') {
+                newVariant = 'GLITCH';
+                upgraded = true;
+            } else if (newXp >= 300 && (newVariant === 'RAINBOW' || newVariant === 'NORMAL')) {
+                newVariant = 'RAINBOW';
+                upgraded = true;
+            } else if (newXp >= 150 && (newVariant === 'DIAMOND' || newVariant === 'NORMAL')) {
+                newVariant = 'DIAMOND';
+                upgraded = true;
+            } else if (newXp >= 50 && (newVariant === 'GOLD' || newVariant === 'NORMAL')) {
+                newVariant = 'GOLD';
+                upgraded = true;
+            }
+
+            await prisma.userArtistCollection.update({
+                where: { id: collection.id },
+                data: { masteryXp: newXp, variant: newVariant, polishLevel: newPolish }
+            });
+        }
+    }
+
+    /**
+     * RPG: Check and apply scrobbles to active Raid Bosses.
+     */
+    static async checkAndApplyRaidBoss(userId: string, artistId: string, scrobbles: number) {
+        // Find active raid bosses for this artist
+        const activeBosses = await prisma.raidBoss.findMany({
+            where: { artistId, status: 'ACTIVE' },
+            include: { artist: true }
+        });
+
+        for (const boss of activeBosses) {
+            const now = new Date();
+            if (now > boss.endTime) {
+                await prisma.raidBoss.update({ where: { id: boss.id }, data: { status: 'FAILED' } });
+                continue;
+            }
+
+            // ── Update Global Progress ──
+            LoggerService.info(`[Raid] Applying ${scrobbles} scrobbles to boss ${boss.id} for artist ${boss.artist.name}`, 'Raid');
+            const updated = await prisma.raidBoss.update({
+                where: { id: boss.id },
+                data: { currentScrobbles: { increment: scrobbles } }
+            });
+
+            // ── Update Individual Contribution (Damage) ──
+            await prisma.raidContribution.upsert({
+                where: { raidId_userId: { raidId: boss.id, userId } },
+                update: { scrobbles: { increment: scrobbles } },
+                create: { raidId: boss.id, userId, scrobbles }
+            });
+
+            if (updated.currentScrobbles >= updated.targetScrobbles) {
+                // Atomic check to ensure only one process handles the victory
+                const result = await prisma.raidBoss.updateMany({
+                    where: { id: boss.id, status: 'ACTIVE' },
+                    data: { status: 'DEFEATED' }
+                });
+
+                if (result.count === 0) continue;
+                
+                // ── VICTOR NOTIFICATION ──
+                if (boss.notificationChannelId) {
+                    try {
+                        const channel = await client.channels.fetch(boss.notificationChannelId) as TextChannel;
+                        if (channel) {
+                            // ── Award Rewards to Contributors ──
+                            const contributors = await prisma.raidContribution.findMany({
+                                where: { raidId: boss.id },
+                                include: { user: true }
+                            });
+
+                            for (const c of contributors) {
+                                // Award a random card of this artist to the user
+                                await this.awardRaidReward(c.user.discordId, boss.artistId);
+                            }
+
+                            // ── Render Victory Card ──
+                            let cardBuffer: Buffer | null = null;
+                            try {
+                                const res = await TrackResolverService.resolveArtist(boss.artist.name);
+                                cardBuffer = await AlbumRenderService.renderRaidAnimation({
+                                    artistName: boss.artist.name,
+                                    image: res.avatarUrl || 'https://lastfm.freetls.fastly.net/i/u/300x300/2a96cbd8b46e442fc41c2b86b821562f.png'
+                                });
+                            } catch (e) {
+                                console.error('[Raid] Failed to render victory card:', e);
+                            }
+
+                            const builder = new ComponentsV2()
+                                .setAccent(0xFF4500)
+                                .addText(`## ⚔️ RAID BOSS DEFEATED!\nThe community has successfully taken down **${boss.artist.name}**!`)
+                                .addText(`\n**Total HP:** \`${boss.targetScrobbles.toLocaleString()}\` HP\n**Heroes Involved:** \`${contributors.length}\` contributors\n\n*Every hero has been awarded a special **RAID ELITE** card of this artist!*`);
+
+                            if (cardBuffer) {
+                                builder.setImage('attachment://raid_victory.webp');
+                            }
+
+                            const payload: any = builder.build();
+                            if (cardBuffer) {
+                                payload.files = [new AttachmentBuilder(cardBuffer, { name: 'raid_victory.webp' })];
+                            }
+
+                            await channel.send(payload);
+                        }
+                    } catch (e) {
+                        console.error('[Raid] Failed to send victory notification:', e);
+                    }
+                }
+
+                // TODO: Award participants (e.g. random card from this artist or vinyls)
+            }
+        }
+    }
+
+    /**
      * RPG: Award Vinyls to user.
      */
     static async awardVinyls(discordId: string, amount: number) {
@@ -319,6 +523,47 @@ export class AlbumGameService {
             where: { userId: profile.userId },
             data: { vinylScraps: { increment: amount } }
         });
+    }
+
+    /**
+     * RPG: Process results of a sync job to update Raid Bosses and Card Mastery.
+     */
+    static async processSyncResults(userId: string, artistCounts: Map<string, {name: string, count: number}>, albumCounts: Map<string, {artistName: string, albumName: string, count: number}>) {
+        if (artistCounts.size === 0) return;
+        LoggerService.info(`[RPG] Processing sync results for user ${userId}. Artists found: ${artistCounts.size}`, 'RPG');
+        
+        // 1. Update Raid Bosses (only for added scrobbles)
+        for (const [key, data] of artistCounts.entries()) {
+            if (data.count <= 0) continue;
+            
+            // Resolve artist ID
+            const artist = await prisma.artist.findFirst({ where: { name: { equals: data.name, mode: 'insensitive' } } });
+            if (artist) {
+                LoggerService.info(`[RPG] Found artist ${artist.name} with ${data.count} new scrobbles`, 'RPG');
+                await this.checkAndApplyRaidBoss(userId, artist.id, data.count);
+                
+                // 2. Update Artist Mastery XP
+                await this.checkAndApplyEvolutions(userId, 'ARTIST', artist.id, data.count);
+            }
+        }
+
+        // 3. Update Album Mastery XP
+        for (const [key, data] of albumCounts.entries()) {
+            if (data.count <= 0) continue;
+
+            const artist = await prisma.artist.findFirst({ where: { name: { equals: data.artistName, mode: 'insensitive' } } });
+            if (artist) {
+                const album = await prisma.album.findFirst({ 
+                    where: { 
+                        name: { equals: data.albumName, mode: 'insensitive' },
+                        artistId: artist.id
+                    } 
+                });
+                if (album) {
+                    await this.checkAndApplyEvolutions(userId, 'ALBUM', album.id, data.count);
+                }
+            }
+        }
     }
 
     /**
@@ -587,5 +832,64 @@ export class AlbumGameService {
             msg: `✅ Successfully opened **${pack.name}**!`,
             roll: { type: 'ALBUM', itemId: album.id, artistName: album.artistName, albumName: album.albumName, image, rarity, variant: pack.variant }
         };
+    }
+    /**
+     * RPG: Get top contributors for a raid.
+     */
+    static async getRaidLeaderboard(raidId: string, limit = 5) {
+        return await prisma.raidContribution.findMany({
+            where: { raidId },
+            include: { user: true },
+            orderBy: { scrobbles: 'desc' },
+            take: limit
+        });
+    }
+
+    /**
+     * RPG: Get specific user contribution for a raid.
+     */
+    static async getUserRaidContribution(raidId: string, userId: string) {
+        return await prisma.raidContribution.findUnique({
+            where: { raidId_userId: { raidId, userId } }
+        });
+    }
+    /**
+     * RPG: Award a card from a specific artist (used for Raids).
+     */
+    static async awardRaidReward(discordId: string, artistId: string) {
+        const dbUser = await prisma.user.findUnique({ where: { discordId } });
+        if (!dbUser) return;
+
+        // Award the Artist Card (RAID variant)
+        const existing = await prisma.userArtistCollection.findUnique({
+            where: { 
+                userId_artistId_rarity_variant: { 
+                    userId: dbUser.id, 
+                    artistId,
+                    rarity: 'COMMON',
+                    variant: 'RAID'
+                } 
+            }
+        });
+
+        if (existing) {
+            // Duplicate RAID reward: Grant 50 Mastery XP instead
+            await this.checkAndApplyEvolutions(dbUser.id, 'ARTIST', artistId, 50);
+        } else {
+            await prisma.userArtistCollection.create({
+                data: { userId: dbUser.id, artistId, rarity: 'COMMON', variant: 'RAID', masteryXp: 10 }
+            });
+        }
+    }
+    /**
+     * RPG: Recalculate total raid progress from individual contributions.
+     * This prevents the "stuck progress" bug caused by sync race conditions.
+     */
+    static async recalculateRaidProgress(raidId: string): Promise<number> {
+        const aggregations = await prisma.raidContribution.aggregate({
+            where: { raidId },
+            _sum: { scrobbles: true }
+        });
+        return aggregations._sum.scrobbles || 0;
     }
 }

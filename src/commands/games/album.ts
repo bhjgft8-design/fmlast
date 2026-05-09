@@ -42,6 +42,11 @@ export default class AlbumCommand extends BaseCommand {
                 .addUserOption(opt => opt.setName('user').setDescription('User to view profile of'))
         )
         .addSubcommand(sub =>
+            sub.setName('roster')
+                .setDescription('View your collected artist cards')
+                .addUserOption(opt => opt.setName('user').setDescription('User to view roster of'))
+        )
+        .addSubcommand(sub =>
             sub.setName('wish')
                 .setDescription('Add/remove an album from your wishlist')
                 .addStringOption(opt => opt.setName('query').setDescription('Artist - Album').setRequired(true))
@@ -102,6 +107,8 @@ export default class AlbumCommand extends BaseCommand {
             await this.handleLeaderboard(interactionOrMessage, isSlash, userId, channel);
         } else if (subcommand === 'quests' || subcommand === 'q') {
             await this.handleQuests(interactionOrMessage, isSlash, userId, channel);
+        } else if (subcommand === 'roster' || subcommand === 'artists') {
+            await this.handleRoster(interactionOrMessage, isSlash, userId, channel, 0);
         } else if (subcommand === 'store' || subcommand === 's' || subcommand === 'packs') {
             await this.handleStore(interactionOrMessage, isSlash, userId, channel);
         }
@@ -173,11 +180,13 @@ export default class AlbumCommand extends BaseCommand {
             let color = isWish ? 0xFF007F : AlbumGameService.getRarityColor(roll.rarity);
             if (roll.variant === 'HOLOGRAPHIC') color = 0x00FFFF;
             if (roll.variant === 'ERROR') color = 0xFF0000;
+            if (roll.variant === 'GLITCH') color = 0x39FF14; // Neon Green
 
             let flavorText = this.getFlavorText(roll.rarity);
             if (isWish) flavorText = `✨ **A DIVINE MANIFESTATION!** ✨`;
             if (roll.variant === 'HOLOGRAPHIC') flavorText = `🌈 **HOLOGRAPHIC VARIANT!** ` + flavorText;
             if (roll.variant === 'ERROR') flavorText = `⚠️ **ERROR VARIANT!** ` + flavorText;
+            if (roll.variant === 'GLITCH') flavorText = `👾 **G L I T C H  A N O M A L Y!** ` + flavorText;
 
             const titleText = roll.type === 'ALBUM'
                 ? `**${roll.artistName}** — **${roll.albumName}**`
@@ -186,7 +195,7 @@ export default class AlbumCommand extends BaseCommand {
             // RENDER CARD if special
             let displayImage = roll.image;
             let attachment: AttachmentBuilder | null = null;
-            if (roll.variant === 'HOLOGRAPHIC' || roll.variant === 'ERROR') {
+            if (roll.variant === 'HOLOGRAPHIC' || roll.variant === 'ERROR' || roll.variant === 'GLITCH') {
                 const buffer = await AlbumRenderService.renderVariant({
                     image: roll.image,
                     variant: roll.variant
@@ -351,7 +360,7 @@ export default class AlbumCommand extends BaseCommand {
                 const resolved = await TrackResolverService.resolveAlbum(artist, albumName);
                 const artworkUrl = resolved.artworkUrl || item.album.imageLarge || 'https://lastfm.freetls.fastly.net/i/u/300x300/2a96cbd8b46e442fc41c2b86b821562f.png';
 
-                if (item.variant === 'HOLOGRAPHIC' || item.variant === 'ERROR') {
+                if (item.variant === 'HOLOGRAPHIC' || item.variant === 'ERROR' || item.variant === 'GLITCH') {
                     cardBuffer = await AlbumRenderService.renderVariant({
                         image: artworkUrl,
                         variant: item.variant
@@ -391,7 +400,7 @@ export default class AlbumCommand extends BaseCommand {
 
             const builder = new ComponentsV2()
                 .setAccent(AlbumGameService.getRarityColor(rarity))
-                .addText(`### 🗃️ SOUNDSCAPE ARCHIVE (#${page + 1}/${totalItems})\nViewing collection for <@${targetId}>\n-# 📅 Claimed on ${claimedDate}`)
+                .addText(`### 🗃️ ALBUM ARCHIVE (#${page + 1}/${totalItems})\nViewing collection for <@${targetId}>\n-# 📅 Claimed on ${claimedDate}`)
                 .setImage(cdnUrl ?? 'attachment://album_card.webp');
 
             const row: any[] = [];
@@ -415,7 +424,7 @@ export default class AlbumCommand extends BaseCommand {
                     const resolved = await TrackResolverService.resolveAlbum(artist, albumName);
                     const artworkUrl = resolved.artworkUrl || item.album.imageLarge || 'https://lastfm.freetls.fastly.net/i/u/300x300/2a96cbd8b46e442fc41c2b86b821562f.png';
 
-                    if (item.variant === 'HOLOGRAPHIC' || item.variant === 'ERROR') {
+                    if (item.variant === 'HOLOGRAPHIC' || item.variant === 'ERROR' || item.variant === 'GLITCH') {
                         cardBuffer = await AlbumRenderService.renderVariant({
                             image: artworkUrl,
                             variant: item.variant
@@ -509,6 +518,219 @@ export default class AlbumCommand extends BaseCommand {
                     await i.editReply(await buildListPayload(listPage));
                     break;
                 case 'col_list_next':
+                    listPage = Math.min(Math.ceil(totalItems / LIST_LIMIT) - 1, listPage + 1);
+                    await i.editReply(await buildListPayload(listPage));
+                    break;
+            }
+        });
+    }
+
+
+    private async handleRoster(interactionOrMessage: any, isSlash: boolean, discordId: string, channel: TextChannel, startPage = 0, overrideTargetId?: string): Promise<void> {
+        const targetId = overrideTargetId || (isSlash && interactionOrMessage.options?.getUser
+            ? (interactionOrMessage.options.getUser('user')?.id || discordId)
+            : discordId);
+
+        if (isSlash && !interactionOrMessage.deferred && !interactionOrMessage.replied) await interactionOrMessage.deferReply();
+        else if (!isSlash && startPage === 0) { try { channel.sendTyping(); } catch { } }
+
+        const totalResult = await AlbumGameService.getArtistCollection(targetId, 0, 1);
+        if (!totalResult || totalResult.count === 0) {
+            const msg = targetId === discordId ? '❌ Your artist roster is empty! Use `/album roll` to start.' : `❌ <@${targetId}>'s artist roster is empty.`;
+            isSlash ? await interactionOrMessage.editReply(msg) : await channel.send(msg);
+            return;
+        }
+        const totalItems = totalResult.count;
+        let currentPage = Math.max(0, Math.min(startPage, totalItems - 1));
+        let listPage = 0;
+        const LIST_LIMIT = 10;
+
+        // ── Card mode payload ──
+        const buildCardPayload = async (page: number) => {
+            const collection = await AlbumGameService.getArtistCollection(targetId, page, 1);
+            const item = collection!.items[0];
+            const artist = item.artist.name;
+            const rarity = item.rarity as AlbumRarity;
+
+            const claimedDate = new Date(item.claimedAt).toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' });
+
+            // ── 1. CHECK RENDER CACHE ──
+            const cacheKey = `artist:${artist}:${rarity}:${item.variant}:${item.polishLevel}`;
+            let cdnUrl = await RenderCacheService.getCachedImage('artist_card', artist, cacheKey);
+            let cardBuffer: Buffer | null = null;
+
+            if (!cdnUrl) {
+                const res = await TrackResolverService.resolveArtist(artist);
+                const artworkUrl = res.avatarUrl || 'https://lastfm.freetls.fastly.net/i/u/300x300/2a96cbd8b46e442fc41c2b86b821562f.png';
+
+                if (item.variant === 'HOLOGRAPHIC' || item.variant === 'ERROR' || item.variant === 'GLITCH') {
+                    cardBuffer = await AlbumRenderService.renderVariant({
+                        image: artworkUrl,
+                        variant: item.variant
+                    });
+                } else if (item.variant === 'RAID') {
+                    cardBuffer = await AlbumRenderService.renderRaidAnimation({
+                        artistName: artist,
+                        image: artworkUrl
+                    });
+                } else {
+                    cardBuffer = await AlbumRenderService.renderAlbumCard({
+                        artistName: 'OFFICIAL ARTIST',
+                        albumName: artist,
+                        image: artworkUrl,
+                        rarity: rarity,
+                        variant: item.variant,
+                        polishLevel: item.polishLevel
+                    });
+                }
+
+                // ── 2. UPLOAD TO STAGING CHANNEL FOR CDN URL ──
+                const stagingChannelId = config.CHART_STAGING_CHANNEL_ID;
+                const client = interactionOrMessage.client;
+                if (stagingChannelId && client) {
+                    try {
+                        const stagingChannel = await client.channels.fetch(stagingChannelId) as TextChannel;
+                        if (stagingChannel?.type === ChannelType.GuildText) {
+                            const att = new AttachmentBuilder(cardBuffer, { name: `artist_${item.artist.id}.webp` });
+                            const stagingMsg = await stagingChannel.send({ files: [att] });
+                            cdnUrl = stagingMsg.attachments.first()?.url || null;
+
+                            if (cdnUrl) {
+                                await RenderCacheService.setCachedImage('artist_card', artist, cacheKey, cdnUrl);
+                                setTimeout(() => stagingMsg.delete().catch(() => { }), 86400000);
+                            }
+                        }
+                    } catch (e) {
+                        console.warn('[roster] Staging upload failed:', e);
+                    }
+                }
+            }
+
+            const builder = new ComponentsV2()
+                .setAccent(AlbumGameService.getRarityColor(rarity))
+                .addText(`### 🎭 ARTIST ROSTER (#${page + 1}/${totalItems})\nViewing roster for <@${targetId}>\n-# 📅 Collected on ${claimedDate}`)
+                .setImage(cdnUrl ?? 'attachment://artist_card.webp');
+
+            const row: any[] = [];
+            if (page > 0) row.push({
+                type: ComponentType.Button, style: ButtonStyle.Secondary,
+                label: 'Back', custom_id: 'ros_prev', emoji: { name: '⬅️' }
+            });
+            row.push({
+                type: ComponentType.Button, style: ButtonStyle.Secondary,
+                label: 'List', custom_id: 'ros_list', emoji: { name: '📋' }
+            });
+            if (page < totalItems - 1) row.push({
+                type: ComponentType.Button, style: ButtonStyle.Secondary,
+                label: 'Next', custom_id: 'ros_next', emoji: { name: '➡️' }
+            });
+            builder.addRow(row);
+
+            const payload: any = builder.build();
+            if (!cdnUrl) {
+                if (!cardBuffer) {
+                    const res = await TrackResolverService.resolveArtist(artist);
+                    const artworkUrl = res.avatarUrl || 'https://lastfm.freetls.fastly.net/i/u/300x300/2a96cbd8b46e442fc41c2b86b821562f.png';
+
+                    if (item.variant === 'HOLOGRAPHIC' || item.variant === 'ERROR' || item.variant === 'GLITCH') {
+                        cardBuffer = await AlbumRenderService.renderVariant({
+                            image: artworkUrl,
+                            variant: item.variant
+                        });
+                    } else if (item.variant === 'RAID') {
+                        cardBuffer = await AlbumRenderService.renderRaidAnimation({
+                            artistName: artist,
+                            image: artworkUrl
+                        });
+                    } else {
+                        cardBuffer = await AlbumRenderService.renderAlbumCard({
+                            artistName: 'OFFICIAL ARTIST',
+                            albumName: artist,
+                            image: artworkUrl,
+                            rarity: rarity,
+                            variant: item.variant,
+                            polishLevel: item.polishLevel
+                        });
+                    }
+                }
+                payload.files = [new AttachmentBuilder(cardBuffer, { name: 'artist_card.webp' })];
+            }
+            return payload;
+        };
+
+        // ── List mode payload ──
+        const buildListPayload = async (lPage: number) => {
+            const totalListPages = Math.ceil(totalItems / LIST_LIMIT);
+            const collection = await AlbumGameService.getArtistCollection(targetId, lPage, LIST_LIMIT);
+
+            let listText = '';
+            for (const item of collection!.items) {
+                const rarityEmoji = this.getRarityEmoji(item.rarity as AlbumRarity);
+                const claimed = new Date(item.claimedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+                listText += `${rarityEmoji} **${item.artist.name}**\n-# 📅 ${claimed}\n`;
+            }
+
+            const builder = new ComponentsV2()
+                .setAccent(0x5865F2)
+                .addText(`### 📋 ARTIST ROSTER (${lPage + 1}/${totalListPages})\nViewing roster for <@${targetId}>\n\n${listText}`);
+
+            const row: any[] = [];
+            if (lPage > 0) row.push({
+                type: ComponentType.Button, style: ButtonStyle.Secondary,
+                label: 'Back', custom_id: 'ros_list_prev', emoji: { name: '⬅️' }
+            });
+            row.push({
+                type: ComponentType.Button, style: ButtonStyle.Primary,
+                label: 'Card View', custom_id: 'ros_card', emoji: { name: '🖼️' }
+            });
+            if (lPage < totalListPages - 1) row.push({
+                type: ComponentType.Button, style: ButtonStyle.Secondary,
+                label: 'Next', custom_id: 'ros_list_next', emoji: { name: '➡️' }
+            });
+            builder.addRow(row);
+
+            return builder.build();
+        };
+
+        // Initial send
+        const payload = await buildCardPayload(currentPage);
+        const msg = isSlash
+            ? await interactionOrMessage.editReply(payload)
+            : await channel.send(payload);
+
+        // Single persistent collector handling all modes
+        const COL_IDS = ['ros_prev', 'ros_next', 'ros_list', 'ros_card', 'ros_list_prev', 'ros_list_next'];
+        const collector = msg.createMessageComponentCollector({
+            filter: (i: any) => COL_IDS.includes(i.customId),
+            time: 300000
+        });
+
+        collector.on('collect', async (i: any) => {
+            if (i.user.id !== discordId) {
+                return i.reply({ content: '❌ Open your own roster to browse!', ephemeral: true });
+            }
+            await i.deferUpdate();
+
+            switch (i.customId) {
+                case 'ros_prev':
+                    currentPage = Math.max(0, currentPage - 1);
+                    await i.editReply(await buildCardPayload(currentPage));
+                    break;
+                case 'ros_next':
+                    currentPage = Math.min(totalItems - 1, currentPage + 1);
+                    await i.editReply(await buildCardPayload(currentPage));
+                    break;
+                case 'ros_list':
+                    await i.editReply(await buildListPayload(listPage));
+                    break;
+                case 'ros_card':
+                    await i.editReply(await buildCardPayload(currentPage));
+                    break;
+                case 'ros_list_prev':
+                    listPage = Math.max(0, listPage - 1);
+                    await i.editReply(await buildListPayload(listPage));
+                    break;
+                case 'ros_list_next':
                     listPage = Math.min(Math.ceil(totalItems / LIST_LIMIT) - 1, listPage + 1);
                     await i.editReply(await buildListPayload(listPage));
                     break;

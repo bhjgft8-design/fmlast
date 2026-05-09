@@ -48,6 +48,30 @@ export class AlbumRenderService {
     }
 
     /**
+     * Renders a special full-image Raid Victory card for artists.
+     */
+    static async renderRaidCard(data: {
+        artistName: string;
+        image: string;
+    }): Promise<Buffer> {
+        return await PuppeteerService.render('raid_card', {
+            ...data,
+        }, { width: 1080, height: 1080 });
+    }
+
+    /**
+     * Renders an animated version of the Raid Victory card.
+     */
+    static async renderRaidAnimation(data: {
+        artistName: string;
+        image: string;
+    }): Promise<Buffer> {
+        return await PuppeteerService.renderAnimation('raid_card', {
+            ...data,
+        }, { width: 1080, height: 1080 }, { fps: 12, duration: 2 });
+    }
+
+    /**
      * Renders a premium album card for the global market.
      */
     static async renderMarketCard(data: {

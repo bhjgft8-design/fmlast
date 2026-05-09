@@ -9,6 +9,7 @@ import { IdResolutionService } from './IdResolutionService';
 import { CacheService } from './CacheService';
 import { LRUCache } from 'lru-cache';
 import { randomUUID } from 'crypto';
+import { AlbumGameService } from './AlbumGameService';
 
 const REDIS_URL = process.env.REDIS_URL?.replace(/^["']|["']$/g, '') || '';
 
@@ -102,7 +103,10 @@ export async function triggerDeltaSync(discordId: string, force = false, waitFor
         
         const lastSyncExecuted = settings.lastSyncExecuted || 0;
         const now = Math.floor(Date.now() / 1000);
-        if (!force && (now - lastSyncExecuted < 600)) return;
+        
+        // Cooldown: 10m for normal syncs, 10s if forced (raids/manual)
+        const cooldown = force ? 10 : 600;
+        if (now - lastSyncExecuted < cooldown) return;
         
         // Update the debounce timestamp immediately so we don't queue duplicates
         settings.lastSyncExecuted = now;
@@ -118,7 +122,7 @@ export async function triggerDeltaSync(discordId: string, force = false, waitFor
             try {
                 await Promise.race([
                     job.waitUntilFinished(deltaQueueEvents),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('Sync wait timeout')), 10000))
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Sync wait timeout')), 60000))
                 ]);
             } catch (err) {
                 console.error(`Delta Sync Wait Failed for ${discordId}:`, err);
@@ -127,6 +131,15 @@ export async function triggerDeltaSync(discordId: string, force = false, waitFor
     } catch (e) {
         console.error("Delta Sync Trigger Failed:", e);
     }
+}
+
+export async function triggerFullSync(discordId: string) {
+    if (!fullQueue) return;
+    const job = await fullQueue.add(`full-${discordId}`, { discordId, type: 'FULL_SYNC' }, { 
+        removeOnComplete: true,
+        jobId: `full-${discordId}`
+    });
+    return job;
 }
 
 interface ParsedPlay {
@@ -143,12 +156,12 @@ function parseTracksFromAPI(tracks: any[]): ParsedPlay[] {
         if (!t || t['@attr']?.nowplaying === 'true') continue;
         const uts = parseInt(t.date?.uts);
         if (!uts) continue;
-        const artistName = t.artist?.['#text'] || t.artist?.name;
+        const artistName = (t.artist?.['#text'] || t.artist?.name)?.trim();
         if (!artistName) continue;
         plays.push({
             artistName,
-            trackName: t.name || 'Unknown',
-            albumName: t.album?.['#text'] || null,
+            trackName: (t.name || 'Unknown').trim(),
+            albumName: t.album?.['#text'] ? t.album?.['#text'].trim() : null,
             uts
         });
     }
@@ -167,31 +180,26 @@ const withTimeout = <T>(promise: Promise<T>, ms: number, label: string): Promise
 async function handleIndexing(job: Job<IndexJobData>) {
     const { discordId, type } = job.data;
     const _type = type || 'FULL_SYNC';
-    const syncStart = Date.now();
 
     const user = await prisma.user.findUnique({ where: { discordId } });
     if (!user || !user.lastfmUsername) return;
 
-    const username = user.lastfmUsername;
-    LoggerService.info(`▶ ${_type} | ${username}`, 'Queue');
+    const isDelta = _type === 'DELTA_SYNC';
+    const username = user.lastfmUsername!;
     const sessionKey = user.lastfmSessionKey;
     const settings: any = user.settings || {};
     
-    let fromTimestamp: number | undefined;
-    let isDelta = _type === 'DELTA_SYNC';
+    let fromTimestamp: number = 0;
+    const now = Math.floor(Date.now() / 1000);
 
     if (isDelta) {
-        // FMBot Parity: To catch deleted scrobbles, we fetch an overlapping window (last 3 hours)
-        // This gives us an overlap window to diff and delete scrobbles removed on Last.fm
-        const lastSync = settings.lastSyncTimestamp;
-        const now = Math.floor(Date.now() / 1000);
-        if (lastSync) {
-            fromTimestamp = lastSync - (3 * 3600);
-            fromTimestamp = Math.max(fromTimestamp, now - (14 * 86400));
-        } else {
-            fromTimestamp = now - (14 * 86400);
-        }
+        // FMBot Parity: To catch delayed/deleted scrobbles, we fetch an overlapping window (last 24 hours)
+        const lastSync = settings.lastSyncTimestamp || 0;
+        fromTimestamp = lastSync > 0 ? Math.max(0, lastSync - (24 * 3600)) : (now - (14 * 86400));
     }
+    
+    const syncStart = Date.now();
+    LoggerService.info(`▶ ${_type} | ${username} (from: ${fromTimestamp})`, 'Queue');
 
     // Local L1 cache to avoid hitting Redis for items already seen in THIS sync
     const l1Cache = {
@@ -211,8 +219,10 @@ async function handleIndexing(job: Job<IndexJobData>) {
     const totalPages = parseInt(firstPage.meta?.totalPages || '0', 10);
     const totalItems = parseInt(firstPage.meta?.total || '0', 10);
 
+    LoggerService.info(`[Queue] Syncing ${username}: ${totalItems.toLocaleString()} items across ${totalPages.toLocaleString()} pages`, 'Queue');
+
     if (totalItems === 0 && !isDelta) {
-         console.log(`[Queue] User ${username} has no scrobbles. Skipping.`);
+         LoggerService.warn(`[Queue] User ${username} has no scrobbles on Last.fm. Skipping index.`, 'Queue');
          return;
     }
 
@@ -394,7 +404,13 @@ async function handleIndexing(job: Job<IndexJobData>) {
             try {
                 if (p === 1) pageData = firstPage;
                 else pageData = await LastFM.getRecentTracksPaginated(username, 1000, p, sessionKey, !!sessionKey, fromTimestamp);
-                if (pageData.tracks) processPage(pageData.tracks);
+                
+                if (pageData.tracks) {
+                    if (pageData.tracks.length > 0) {
+                        console.log(`[Queue] Processing ${pageData.tracks.length} tracks for page ${p} (${username})`);
+                    }
+                    processPage(pageData.tracks);
+                }
                 break;
             } catch (err: any) {
                 console.error(`[Queue] Page ${p} failed for ${username} (Retry ${retries + 1}/4)`);
@@ -411,6 +427,8 @@ async function handleIndexing(job: Job<IndexJobData>) {
             if ((pct >= 25 && prev < 25) || (pct >= 50 && prev < 50) || (pct >= 75 && prev < 75)) {
                 LoggerService.info(`  ${pct}% — page ${p}/${totalPages} | ${totalPlaysProcessed.toLocaleString()} plays`, 'Queue');
             }
+            // Update job progress for UI tracking
+            await job.updateProgress(pct);
         }
 
         if (!isDelta && (p % 2 === 0 || p === totalPages)) {
@@ -424,6 +442,13 @@ async function handleIndexing(job: Job<IndexJobData>) {
     }
 
     await upsertAggregates(user.id, artistCounts, trackCounts, albumCounts, isDelta, l1Cache);
+    
+    // ── RPG PROGRESSION (Raids + Mastery) ──
+    try {
+        await AlbumGameService.processSyncResults(user.id, artistCounts, albumCounts);
+    } catch (err) {
+        LoggerService.error('Failed to process RPG sync results', err as Error, 'Queue');
+    }
 
     if (maxUtsEncountered > (settings.lastSyncTimestamp || 0)) {
         settings.lastSyncTimestamp = maxUtsEncountered;
@@ -670,6 +695,9 @@ async function upsertAggregates(userId: string, artists: Map<string, any>, track
             for (const d of chunk) {
                 const artistId = await IdResolutionService.getArtistId(d.name);
                 operations.push(prisma.$executeRaw`INSERT INTO user_artists (id, user_id, artist_id, artist_name, playcount) VALUES (${'ar_'+Math.random().toString(36).substring(2)}, ${userId}, ${artistId}, ${d.name}, ${d.count}) ON CONFLICT (user_id, artist_name) DO UPDATE SET artist_id = EXCLUDED.artist_id, playcount = user_artists.playcount + ${d.count}`);
+                if (d.count > 0) {
+                    // Handled in bulk after sync
+                }
             }
             await Promise.all(operations);
         }
@@ -694,6 +722,9 @@ async function upsertAggregates(userId: string, artists: Map<string, any>, track
                 const artistId = await IdResolutionService.getArtistId(d.artistName);
                 const albumId = await IdResolutionService.getAlbumId(artistId, d.albumName);
                 operations.push(prisma.$executeRaw`INSERT INTO user_albums (id, user_id, artist_id, album_id, artist_name, album_name, playcount) VALUES (${'al_'+Math.random().toString(36).substring(2)}, ${userId}, ${artistId}, ${albumId}, ${d.artistName}, ${d.albumName}, ${d.count}) ON CONFLICT (user_id, artist_name, album_name) DO UPDATE SET artist_id = EXCLUDED.artist_id, album_id = EXCLUDED.album_id, playcount = user_albums.playcount + ${d.count}`);
+                if (d.count > 0) {
+                    // Handled in bulk after sync
+                }
             }
             await Promise.all(operations);
         }

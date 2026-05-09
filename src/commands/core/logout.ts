@@ -38,14 +38,10 @@ export default class LogoutCommand extends BaseCommand {
             return;
         }
 
-        // Unlink the account
-        await prisma.user.update({
-            where: { discordId: userId },
-            data: {
-                lastfmUsername: null,
-                lastfmSessionKey: null,
-                lastfmRequestToken: null
-            }
+        // Completely delete the user record. 
+        // Cascade deletes in schema.prisma will handle wiping plays, collections, contributions, etc.
+        await prisma.user.delete({
+            where: { discordId: userId }
         });
 
         const payload = new ComponentsV2()

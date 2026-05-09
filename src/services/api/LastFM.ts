@@ -188,8 +188,12 @@ export class LastFM {
     }
 
     /** Get user info (total scrobbles, etc.) */
-    static async getUserInfo(username: string, sessionKey?: string | null) {
+    static async getUserInfo(username: string, sessionKey?: string | null, ignoreCache = false) {
         const cacheKey = `lfm:userinfo:${username.toLowerCase()}`;
+        if (ignoreCache) {
+            const data = await this.request('user.getInfo', username, {}, sessionKey);
+            return data.user as any;
+        }
         return CacheService.wrap(cacheKey, 3600, async () => {
             const data = await this.request('user.getInfo', username, {}, sessionKey);
             return data.user as any;

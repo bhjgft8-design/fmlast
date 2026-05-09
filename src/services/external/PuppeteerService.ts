@@ -4,6 +4,9 @@ import * as path from 'path';
 import handlebars from 'handlebars';
 import { LoggerService } from '../bot/LoggerService';
 import { config } from '../../../config';
+import ffmpeg from 'fluent-ffmpeg';
+import * as os from 'os';
+import { v4 as uuidv4 } from 'uuid';
 
 // Register Handlebars Helpers
 handlebars.registerHelper('eq', (a, b) => a === b);
@@ -114,21 +117,102 @@ export class PuppeteerService {
         }
     }
 
-    /**
-     * Render an HTML template into a PNG buffer.
-     * Auto-retries once on session-closed errors by relaunching the browser.
-     */
     static async render(templateName: string, data: any, viewport: { width: number; height: number }): Promise<Buffer> {
         try {
             return await this._renderInternal(templateName, data, viewport);
         } catch (err: any) {
-            // If the browser/page crashed, relaunch and retry once
             if (err.message?.includes('Session closed') || err.message?.includes('Target closed') || err.message?.includes('Protocol error')) {
-                LoggerService.warn(`Browser session crashed during ${templateName} render. Relaunching...`, 'Puppeteer');
                 await this.shutdown();
                 return await this._renderInternal(templateName, data, viewport);
             }
             throw err;
+        }
+    }
+
+    /**
+     * Render an HTML template into an animated WebP buffer.
+     * Captures multiple frames and encodes them using ffmpeg.
+     */
+    static async renderAnimation(
+        templateName: string, 
+        data: any, 
+        viewport: { width: number; height: number },
+        options: { fps: number; duration: number } = { fps: 15, duration: 3 }
+    ): Promise<Buffer> {
+        const startTime = Date.now();
+        const page = await this.getPage();
+        const tempDir = path.join(os.tmpdir(), `fm_render_${uuidv4()}`);
+        fs.mkdirSync(tempDir);
+
+        try {
+            await page.setViewport(viewport);
+            
+            // 1. Prepare HTML
+            const templatePath = path.join(process.cwd(), 'src', 'images', 'templates', `${templateName}.html`);
+            const templateSource = fs.readFileSync(templatePath, 'utf-8');
+            const template = handlebars.compile(templateSource);
+            const html = template(data);
+
+            await page.setContent(html, { waitUntil: 'load' });
+            
+            // Wait for images
+            await page.evaluate(() => new Promise(r => setTimeout(r, 1000)));
+
+            // 2. Capture Frames (Optimized: 1080 logical px, but 0.6x scale = 648 real px)
+            await page.setViewport({ width: 1080, height: 1080, deviceScaleFactor: 0.6 });
+            const frameCount = options.fps * options.duration;
+            const framePaths: string[] = [];
+            
+            for (let i = 0; i < frameCount; i++) {
+                const framePath = path.join(tempDir, `frame_${String(i).padStart(3, '0')}.jpg`);
+                await page.screenshot({ 
+                    path: framePath, 
+                    type: 'jpeg', 
+                    quality: 75
+                });
+                framePaths.push(framePath);
+            }
+
+            // 3. Encode with ffmpeg (Hyper-optimized)
+            const outputPath = path.join(tempDir, 'output.webp');
+            
+            await new Promise<void>((resolve, reject) => {
+                ffmpeg()
+                    .input(path.join(tempDir, 'frame_%03d.jpg'))
+                    .inputFPS(options.fps)
+                    .outputOptions([
+                        '-vcodec libwebp',
+                        '-lossless 0',
+                        '-compression_level 1', // Absolute fastest
+                        '-q:v 50',              // Balanced quality
+                        '-preset picture',
+                        '-loop 0',
+                        '-an'
+                    ])
+                    .on('error', (err) => {
+                        LoggerService.error('ffmpeg encoding failed', err, 'Puppeteer');
+                        reject(err);
+                    })
+                    .on('end', () => resolve())
+                    .save(outputPath);
+            });
+
+            const buffer = fs.readFileSync(outputPath);
+            
+            const totalDuration = Date.now() - startTime;
+            LoggerService.info(`Animated ${templateName} (${options.duration}s) rendered in ${totalDuration}ms`, 'Puppeteer');
+
+            return buffer;
+
+        } catch (err) {
+            LoggerService.error(`Animation rendering failed for ${templateName}`, err, 'Puppeteer');
+            throw err;
+        } finally {
+            // Cleanup
+            try {
+                fs.rmSync(tempDir, { recursive: true, force: true });
+            } catch {}
+            await this.releasePage(page);
         }
     }
 
@@ -184,7 +268,7 @@ export class PuppeteerService {
                 // Safety timeout: don't wait more than 10s for images
                 await Promise.race([
                     Promise.all(imagePromises),
-                    new Promise(r => setTimeout(r, 10000))
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Sync wait timeout')), 60000))
                 ]);
             });
 

@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@900&family=Bebas+Neue&family=Space+Grotesk:wght@700&display=swap');
+        
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            width: 1080px;
+            height: 1080px;
+            background: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow: hidden;
+            font-family: 'Space Grotesk', sans-serif;
+        }
+
+        .canvas {
+            width: 1080px;
+            height: 1080px;
+            position: relative;
+            background: #050505;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            border: 24px solid #111;
+            overflow: hidden;
+        }
+
+        /* Cinematic Background */
+        .art-wrap {
+            width: 1020px;
+            height: 1020px;
+            position: relative;
+            overflow: hidden;
+            background: #000;
+            border-radius: 4px;
+        }
+
+        .artist-img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            filter: contrast(1.2) brightness(0.7) saturate(1.2);
+        }
+
+        /* ── EPIC LAYERS ── */
+        .vignette {
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle, transparent 20%, rgba(0,0,0,0.9) 100%);
+            z-index: 3;
+            pointer-events: none;
+        }
+
+        .color-grade {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(135deg, rgba(255, 69, 0, 0.1), rgba(139, 0, 0, 0.2));
+            mix-blend-mode: color;
+            z-index: 4;
+        }
+
+        .overlay-gradient {
+            position: absolute;
+            inset: 0;
+            background: linear-gradient(to top, rgba(0,0,0,1) 0%, rgba(0,0,0,0.5) 30%, transparent 60%);
+            z-index: 5;
+        }
+
+        /* ── BORDERS & GLOWS ── */
+        .outer-glow {
+            position: absolute;
+            inset: 0;
+            border: 4px solid #FF4500;
+            box-shadow: 
+                0 0 50px rgba(255, 69, 0, 0.8),
+                inset 0 0 50px rgba(255, 69, 0, 0.8);
+            z-index: 100;
+            animation: border-pulse 2s infinite ease-in-out;
+        }
+
+        @keyframes border-pulse {
+            0%, 100% { opacity: 0.7; transform: scale(1); }
+            50% { opacity: 1; transform: scale(1.002); }
+        }
+
+        .scanlines {
+            position: absolute;
+            inset: 0;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0,0,0,0.15) 0px,
+                rgba(0,0,0,0.15) 2px,
+                transparent 2px,
+                transparent 4px
+            );
+            z-index: 10;
+            pointer-events: none;
+        }
+
+        /* ── TYPOGRAPHY ── */
+        .header-wrap {
+            position: absolute;
+            top: 80px;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            z-index: 50;
+        }
+
+        .raid-tag {
+            background: #FF4500;
+            color: #000;
+            padding: 12px 60px;
+            font-size: 38px;
+            font-weight: 900;
+            letter-spacing: 12px;
+            text-transform: uppercase;
+            font-family: 'Bebas Neue', sans-serif;
+            clip-path: polygon(10% 0, 100% 0, 90% 100%, 0 100%);
+            box-shadow: 0 0 40px rgba(255, 69, 0, 0.6);
+            animation: tag-flicker 1.5s infinite;
+        }
+
+        @keyframes tag-flicker {
+            0%, 100% { opacity: 1; filter: brightness(1); }
+            50% { opacity: 0.9; filter: brightness(1.3); }
+        }
+
+        .status-text {
+            color: #fff;
+            font-size: 24px;
+            letter-spacing: 8px;
+            text-transform: uppercase;
+            margin-top: 20px;
+            opacity: 0.8;
+            text-shadow: 0 0 10px #FF4500;
+        }
+
+        .footer-wrap {
+            position: absolute;
+            bottom: 80px;
+            width: 100%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            z-index: 50;
+        }
+
+        .artist-name {
+            font-family: 'Bebas Neue', sans-serif;
+            font-size: 160px;
+            line-height: 0.8;
+            color: #fff;
+            text-transform: uppercase;
+            letter-spacing: -2px;
+            text-align: center;
+            padding: 0 40px;
+            filter: drop-shadow(0 0 20px rgba(255, 69, 0, 0.8));
+            -webkit-text-stroke: 2px rgba(255,255,255,0.1);
+        }
+
+        .rarity-badge {
+            margin-top: 30px;
+            color: #FF4500;
+            font-size: 28px;
+            font-weight: 700;
+            letter-spacing: 4px;
+            text-transform: uppercase;
+            background: rgba(255, 69, 0, 0.1);
+            padding: 8px 30px;
+            border: 1px solid #FF4500;
+            border-radius: 50px;
+            backdrop-filter: blur(10px);
+        }
+
+        /* ── PARTICLES ── */
+        .particle-canvas {
+            position: absolute;
+            inset: 0;
+            z-index: 20;
+            pointer-events: none;
+        }
+
+        .ember {
+            position: absolute;
+            background: #FF4500;
+            border-radius: 50%;
+            filter: blur(1px);
+            box-shadow: 0 0 10px #FF4500;
+            animation: rise-and-flicker var(--duration) infinite linear;
+        }
+
+        @keyframes rise-and-flicker {
+            0% { transform: translateY(0) translateX(0) scale(1); opacity: 0; }
+            10% { opacity: 1; }
+            50% { transform: translateY(-500px) translateX(var(--drift)) scale(1.5); }
+            100% { transform: translateY(-1100px) translateX(calc(var(--drift) * 2)) scale(0); opacity: 0; }
+        }
+
+        .lightning {
+            position: absolute;
+            inset: 0;
+            background: rgba(255, 255, 255, 0);
+            z-index: 100;
+            pointer-events: none;
+            animation: strike 8s infinite;
+        }
+
+        @keyframes strike {
+            0%, 95%, 100% { background: rgba(255, 255, 255, 0); }
+            96% { background: rgba(255, 69, 0, 0.2); }
+            97% { background: rgba(255, 255, 255, 0.1); }
+            98% { background: rgba(255, 69, 0, 0.3); }
+        }
+
+    </style>
+</head>
+<body>
+    <div class="canvas">
+        <div class="outer-glow"></div>
+        <div class="lightning"></div>
+        
+        <div class="art-wrap">
+            <img src="{{image}}" class="artist-img" />
+            
+            <div class="vignette"></div>
+            <div class="color-grade"></div>
+            <div class="overlay-gradient"></div>
+            <div class="scanlines"></div>
+            
+            <div class="header-wrap">
+                <div class="raid-tag">RAID DEFEATED</div>
+                <div class="status-text">COMMUNITY VICTORY</div>
+            </div>
+
+            <div class="footer-wrap">
+                <div class="artist-name">{{artistName}}</div>
+                <div class="rarity-badge">RAID ELITE UNLOCKED</div>
+            </div>
+            
+            <div class="particle-canvas" id="embers"></div>
+        </div>
+    </div>
+
+    <script>
+        const container = document.getElementById('embers');
+        for (let i = 0; i < 60; i++) {
+            const ember = document.createElement('div');
+            ember.className = 'ember';
+            const size = Math.random() * 6 + 2;
+            const duration = Math.random() * 3 + 2;
+            const drift = (Math.random() - 0.5) * 200;
+            
+            ember.style.width = size + 'px';
+            ember.style.height = size + 'px';
+            ember.style.left = Math.random() * 100 + '%';
+            ember.style.top = (100 + Math.random() * 10) + '%';
+            ember.style.setProperty('--duration', duration + 's');
+            ember.style.setProperty('--drift', drift + 'px');
+            ember.style.animationDelay = Math.random() * 5 + 's';
+            
+            container.appendChild(ember);
+        }
+    </script>
+</body>
+</html>

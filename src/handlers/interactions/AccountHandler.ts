@@ -65,32 +65,80 @@ export class AccountHandler extends BaseInteractionHandler {
                 await interaction.deferUpdate().catch(() => {});
                 const username = await LastFM.completeLogin(interaction.user.id);
                 
+                let job: any = null;
                 if (fullQueue) {
-                    await fullQueue.drain().catch(() => {});
-                    const existing = await fullQueue.getJob(`full-${interaction.user.id}`);
-                    if (existing) {
-                        const state = await existing.getState();
-                        if (state !== 'active') {
-                            await existing.remove().catch(() => {});
-                        }
-                    }
-                    await fullQueue.add('index-user', { discordId: interaction.user.id, type: 'FULL_SYNC' }, {
+                    // Start the full sync immediately
+                    job = await fullQueue.add('index-user', { discordId: interaction.user.id, type: 'FULL_SYNC' }, {
                         jobId: `full-${interaction.user.id}`,
                         removeOnComplete: true,
                         removeOnFail: true
                     });
                 }
 
-                await interaction.editReply({
-                    components: [{
-                        type: 17,
+                // Helper for progress bar
+                const getBar = (pct: number) => {
+                    const size = 10;
+                    const filled = Math.floor(pct / 10);
+                    return `\`${'█'.repeat(filled)}${'░'.repeat(size - filled)}\` **${pct}%**`;
+                };
+
+                const updateEmbed = async (pct: number, done = false) => {
+                    const content = `🎉 **Last.fm Linked!**\nSuccessfully connected as **${username}**\n\n` +
+                        (done ? `✅ **Data Download Complete!**\nYour private stats are now available!` : 
+                                `📥 **Downloading your data...**\n${getBar(pct)}\n*This may take a minute depending on your playcount.*`);
+
+                    await interaction.editReply({
                         components: [{
-                            type: ComponentType.TextDisplay,
-                            content: `🎉 **Last.fm Linked!**\nSuccessfully connected as **${username}**\n\nYour private stats are now available!`
+                            type: 17,
+                            components: [{
+                                type: ComponentType.TextDisplay,
+                                content: content
+                            }]
                         }]
-                    }],
-                    flags: 32768
-                });
+                    }).catch(() => {});
+                };
+
+                // Initial show
+                await updateEmbed(0);
+
+                // Polling loop
+                if (job) {
+                    let lastPct = 0;
+                    
+                    const checkProgress = async () => {
+                        try {
+                            const currentJob = await fullQueue!.getJob(job.id);
+                            
+                            // If job is gone, it likely finished successfully (since we removeOnComplete)
+                            if (!currentJob) {
+                                await updateEmbed(100, true);
+                                return true;
+                            }
+
+                            const progress = (currentJob.progress as number) || 0;
+                            const state = await currentJob.getState();
+                            
+                            if (state === 'completed' || progress >= 100) {
+                                await updateEmbed(100, true);
+                                return true;
+                            } else if (progress > lastPct) {
+                                lastPct = progress;
+                                await updateEmbed(lastPct);
+                            }
+                            return false;
+                        } catch (err) {
+                            return true; // Stop on error
+                        }
+                    };
+
+                    const interval = setInterval(async () => {
+                        if (await checkProgress()) clearInterval(interval);
+                    }, 3000);
+
+                    // Safety timeout (10 mins)
+                    setTimeout(() => clearInterval(interval), 600000);
+                }
+
                 return;
             }
 

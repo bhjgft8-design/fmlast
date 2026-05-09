@@ -33,6 +33,8 @@ model User {
   gameProfile        UserGameProfile?
   userPlays          UserPlay[]
   userTracks         UserTrack[]
+  activeTours        ActiveTour[]
+  raidContributions  RaidContribution[]
 
   @@index([discordId])
   @@index([lastfmUsername])
@@ -85,6 +87,8 @@ model Artist {
   userArtists    UserArtist[]
   userPlays      UserPlay[]
   userTracks     UserTrack[]
+  activeTours    ActiveTour[]
+  raidBosses     RaidBoss[]
 
   @@map("artists")
 }
@@ -175,11 +179,12 @@ model UserArtistCollection {
   rarity      String   @default("COMMON")
   variant     String   @default("NORMAL")
   polishLevel Int      @default(0) @map("polish_level")
+  masteryXp   Int      @default(0) @map("mastery_xp")
   claimedAt   DateTime @default(now()) @map("claimed_at")
   artist      Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
   user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, artistId])
+  @@unique([userId, artistId, rarity, variant])
   @@map("user_artist_collections")
 }
 
@@ -369,4 +374,47 @@ model ArtistTag {
 
   @@id([artistId, tagId])
   @@map("artist_tags")
+}
+
+model ActiveTour {
+  id               String   @id @default(cuid())
+  userId           String   @map("user_id")
+  artistId         String   @map("artist_id")
+  startTime        DateTime @map("start_time")
+  initialScrobbles Int      @map("initial_scrobbles")
+  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  artist           Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, artistId])
+  @@map("active_tours")
+}
+
+model RaidBoss {
+  id               String   @id @default(cuid())
+  guildId          String?  @map("guild_id")
+  artistId         String   @map("artist_id")
+  targetScrobbles  Int      @map("target_scrobbles")
+  currentScrobbles Int      @default(0) @map("current_scrobbles")
+  startTime        DateTime @default(now()) @map("start_time")
+  endTime          DateTime @map("end_time")
+  status           String   @default("ACTIVE") // ACTIVE, DEFEATED, FAILED
+  notificationChannelId String? @map("notification_channel_id")
+  artist           Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
+  contributions    RaidContribution[]
+
+  @@index([status])
+  @@map("raid_bosses")
+}
+
+model RaidContribution {
+  id         String   @id @default(cuid())
+  raidId     String   @map("raid_id")
+  userId     String   @map("user_id")
+  scrobbles  Int      @default(0)
+  updatedAt  DateTime @updatedAt @map("updated_at")
+  raid       RaidBoss @relation(fields: [raidId], references: [id], onDelete: Cascade)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([raidId, userId])
+  @@map("raid_contributions")
 }
