@@ -92,9 +92,10 @@ interface IndexJobData {
     discordId: string;
     type: 'FULL_SYNC' | 'DELTA_SYNC' | 'HISTORY_IMPORT';
     jobId?: string;
+    isDeep?: boolean;
 }
 
-export async function triggerDeltaSync(discordId: string, force = false, waitForCompletion = false) {
+export async function triggerDeltaSync(discordId: string, isDeep = false, waitForCompletion = false) {
     if (!deltaQueue) return;
     try {
         const user = await prisma.user.findUnique({ where: { discordId } });
@@ -104,15 +105,15 @@ export async function triggerDeltaSync(discordId: string, force = false, waitFor
         const lastSyncExecuted = settings.lastSyncExecuted || 0;
         const now = Math.floor(Date.now() / 1000);
         
-        // Cooldown: 10m for normal syncs, 10s if forced (raids/manual)
-        const cooldown = force ? 10 : 600;
+        // Cooldown: 10m for normal syncs, 10s if it's a deep manual sync
+        const cooldown = isDeep ? 10 : 600;
         if (now - lastSyncExecuted < cooldown) return;
         
         // Update the debounce timestamp immediately so we don't queue duplicates
         settings.lastSyncExecuted = now;
         await prisma.user.update({ where: { discordId }, data: { settings } });
 
-        const job = await deltaQueue.add(`${force ? 'force-' : ''}delta-${discordId}`, { discordId, type: 'DELTA_SYNC' }, {
+        const job = await deltaQueue.add(`${isDeep ? 'deep-' : ''}delta-${discordId}`, { discordId, type: 'DELTA_SYNC', isDeep }, {
             jobId: `delta-${discordId}`,
             removeOnComplete: true,
             removeOnFail: true
@@ -194,8 +195,10 @@ async function handleIndexing(job: Job<IndexJobData>) {
 
     if (isDelta) {
         // FMBot Parity: To catch delayed/deleted scrobbles, we fetch an overlapping window (last 24 hours)
+        // If it's a "Deep" sync (manual update), we look back 14 days to catch filler scrobbles.
         const lastSync = settings.lastSyncTimestamp || 0;
-        fromTimestamp = lastSync > 0 ? Math.max(0, lastSync - (24 * 3600)) : (now - (14 * 86400));
+        const lookbackWindow = job.data.isDeep ? (14 * 86400) : (24 * 3600);
+        fromTimestamp = lastSync > 0 ? Math.max(0, lastSync - lookbackWindow) : (now - (14 * 86400));
     }
     
     const syncStart = Date.now();

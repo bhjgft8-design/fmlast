@@ -157,7 +157,6 @@ export class LastFM {
 
         return session.name;
     }
-
     // ===================== USER METHODS =====================
 
     /** Get current / last played track (Public with Private Fallback) */
