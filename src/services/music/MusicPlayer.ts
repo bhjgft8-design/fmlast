@@ -415,12 +415,15 @@ export class MusicPlayer {
                 try {
                     let res;
                     const searchStr = track.artistName && track.trackTitle ? `${track.artistName} ${track.trackTitle}` : track.title;
+                    const attempts = track._fallbackAttempts || 0;
                     
-                    if (track._failedFallback) {
-                        console.log(`[MusicPlayer] 🔍 Retrying on node ${node.name} with spsearch/scsearch: ${searchStr}`);
-                        res = await node.rest.resolve(`spsearch:${searchStr}`);
+                    if (attempts > 0) {
+                        const prefix1 = attempts % 2 === 1 ? 'spsearch:' : 'scsearch:';
+                        const prefix2 = attempts % 2 === 1 ? 'scsearch:' : 'spsearch:';
+                        console.log(`[MusicPlayer] 🔍 Retrying on node ${node.name} with ${prefix1}/${prefix2}: ${searchStr}`);
+                        res = await node.rest.resolve(`${prefix1}${searchStr}`);
                         if (!res || !res.data || res.loadType === 'empty' || res.loadType === 'error') {
-                            res = await node.rest.resolve(`scsearch:${searchStr}`);
+                            res = await node.rest.resolve(`${prefix2}${searchStr}`);
                         }
                     } else {
                         console.log(`[MusicPlayer] 🔍 Resolving on node ${node.name}: ${track.url || track.title}`);
@@ -524,12 +527,21 @@ export class MusicPlayer {
             
             // Check for silent stream failure (finished instantly)
             const playDuration = Date.now() - (queue.lastStart || 0);
-            if (data.reason === 'finished' && playDuration < 2000 && queue.lastPlayedTrack && !queue.lastPlayedTrack._failedFallback) {
+            const attempts = queue.lastPlayedTrack?._fallbackAttempts || 0;
+            if (data.reason === 'finished' && playDuration < 2000 && queue.lastPlayedTrack && attempts < 2) {
                 console.log(`[MusicPlayer] ⚠️ Track finished instantly (possible silent stream failure). Triggering fallback...`);
                 const failedTrack = queue.lastPlayedTrack;
-                failedTrack._failedFallback = true;
+                failedTrack._fallbackAttempts = attempts + 1;
                 failedTrack.url = ''; 
                 queue.tracks.unshift(failedTrack);
+                
+                // Try switching node if possible
+                const currentNodeName = queue.player?.node.name;
+                const otherNode = Array.from(shoukaku.nodes.values()).find(n => n.state === 1 && n.name !== currentNodeName);
+                if (otherNode && queue.player) {
+                    console.log(`[MusicPlayer] 🔀 Switching player from ${currentNodeName} to ${otherNode.name} to avoid block...`);
+                    queue.player.move(otherNode.name).catch(() => {});
+                }
                 
                 if (endTimeout) clearTimeout(endTimeout);
                 this.processQueue(guildId, 1).catch(() => {});
@@ -563,11 +575,20 @@ export class MusicPlayer {
             }
 
             const failedTrack = queue.lastPlayedTrack;
-            if (failedTrack && !failedTrack._failedFallback) {
-                console.log(`[MusicPlayer] 🔄 Retrying track with fallback sources...`);
-                failedTrack._failedFallback = true;
+            const attempts = failedTrack?._fallbackAttempts || 0;
+            if (failedTrack && attempts < 2) {
+                console.log(`[MusicPlayer] 🔄 Retrying track with fallback sources (Attempt ${attempts + 1}/2)...`);
+                failedTrack._fallbackAttempts = attempts + 1;
                 failedTrack.url = ''; // Clear URL to force search
                 queue.tracks.unshift(failedTrack);
+                
+                // Switch node to another healthy node to evade IP blocks
+                const currentNodeName = queue.player?.node.name;
+                const otherNode = Array.from(shoukaku.nodes.values()).find(n => n.state === 1 && n.name !== currentNodeName);
+                if (otherNode && queue.player) {
+                    console.log(`[MusicPlayer] 🔀 Switching player from ${currentNodeName} to ${otherNode.name} to avoid block...`);
+                    queue.player.move(otherNode.name).catch(() => {});
+                }
             }
             
             setTimeout(() => {

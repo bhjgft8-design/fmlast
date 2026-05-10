@@ -19,7 +19,7 @@ export interface YoutubeResult {
     statsText?: string;      // For UI rendering
     requesterName?: string;  // For UI rendering
     requesterId?: string;    // For user history
-    _failedFallback?: boolean;
+    _fallbackAttempts?: number;
 }
 
 export interface AudioStreamResult {
