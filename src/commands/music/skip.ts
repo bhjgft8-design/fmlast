@@ -5,7 +5,7 @@ import { SlashCommandBuilder } from 'discord.js';
 export default class SkipCommand extends BaseCommand {
     name = 'skip';
     description = 'Skip the current track';
-    aliases = ['s', 'next'];
+    aliases = ['sk', 'next'];
 
     slashData = new SlashCommandBuilder()
         .setName('skip')

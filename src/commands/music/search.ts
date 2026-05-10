@@ -17,6 +17,7 @@ import { prisma } from '../../database/client';
 export default class SearchCommand extends BaseCommand {
     name = 'search';
     description = 'Search YouTube and pick a song to play';
+    aliases = ['s'];
 
     slashData = new SlashCommandBuilder()
         .setName('search')
