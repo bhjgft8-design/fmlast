@@ -29,7 +29,8 @@ type CronJobName =
     | 'lastfm-health-check'
     | 'drift-detection-sweep'
     | 'enrich-global-metadata'
-    | 'market-refresh';
+    | 'market-refresh'
+    | 'rotate-bot-avatar';
 
 interface CronJobData {
     name: CronJobName;
@@ -97,6 +98,13 @@ export class CronManager {
             removeOnFail: true,
         });
 
+        // 7. Rotate bot avatar — every 1 hour
+        await cronQueue.add('rotate-bot-avatar', { name: 'rotate-bot-avatar' }, {
+            repeat: { pattern: '0 * * * *' },
+            removeOnComplete: true,
+            removeOnFail: true,
+        });
+
         // ── Worker to Process Cron Jobs ─────────────────────────────────
 
         cronWorker = new Worker('cron-jobs', async (job: Job<CronJobData>) => {
@@ -119,6 +127,9 @@ export class CronManager {
                 case 'market-refresh':
                     await handleMarketRefresh();
                     break;
+                case 'rotate-bot-avatar':
+                    await handleRotateAvatar();
+                    break;
             }
         }, { connection, concurrency: 1 });
 
@@ -127,6 +138,9 @@ export class CronManager {
         });
 
         LoggerService.info('CronManager started — 4 repeatable jobs registered.', 'CronManager');
+
+        // Run avatar rotation immediately on boot
+        handleRotateAvatar().catch(err => LoggerService.error('Initial avatar rotation failed', err, 'CronManager'));
     }
 
     /**
@@ -337,4 +351,66 @@ async function handleMarketRefresh(): Promise<void> {
     const { AlbumGameService } = await import('./AlbumGameService');
     await AlbumGameService.refreshMarket();
     LoggerService.info('Global Market has been refreshed.', 'CronManager');
+}
+
+/**
+ * Rotate the bot's profile picture using a shuffled chain.
+ */
+async function handleRotateAvatar(): Promise<void> {
+    const fs = await import('fs');
+    const path = await import('path');
+    const { CacheService } = await import('./CacheService');
+    const { client } = await import('../../index');
+
+    if (!client || !client.user) {
+        LoggerService.warn('Cannot rotate avatar — Discord client not ready.', 'CronManager');
+        return;
+    }
+
+    const pfpsDir = path.resolve(process.cwd(), 'pfps');
+    if (!fs.existsSync(pfpsDir)) {
+        LoggerService.warn('Cannot rotate avatar — pfps folder not found.', 'CronManager');
+        return;
+    }
+
+    const cacheKey = 'bot:avatar:chain';
+    let chain: string[] = await CacheService.get<string[]>(cacheKey) || [];
+
+    // If chain is empty, rebuild and shuffle
+    if (!chain || chain.length === 0) {
+        const files = fs.readdirSync(pfpsDir).filter((f: string) => 
+            f.toLowerCase().endsWith('.jpg') || 
+            f.toLowerCase().endsWith('.jpeg') || 
+            f.toLowerCase().endsWith('.png') || 
+            f.toLowerCase().endsWith('.gif')
+        );
+
+        if (files.length === 0) {
+            LoggerService.warn('Cannot rotate avatar — no images in pfps folder.', 'CronManager');
+            return;
+        }
+
+        // Fisher-Yates shuffle
+        for (let i = files.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [files[i], files[j]] = [files[j], files[i]];
+        }
+        
+        chain = files;
+        LoggerService.info(`Rebuilt avatar chain with ${chain.length} images.`, 'CronManager');
+    }
+
+    const nextImage = chain.pop();
+    if (!nextImage) return;
+
+    // Save remaining chain
+    await CacheService.set(cacheKey, chain, 86400 * 30); // Store for 30 days
+
+    try {
+        const imagePath = path.join(pfpsDir, nextImage);
+        await client.user.setAvatar(imagePath);
+        LoggerService.info(`Successfully updated bot avatar to ${nextImage} (${chain.length} remaining in chain)`, 'CronManager');
+    } catch (err) {
+        LoggerService.error(`Failed to update bot avatar to ${nextImage}`, err, 'CronManager');
+    }
 }
