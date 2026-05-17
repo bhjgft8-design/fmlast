@@ -39,7 +39,8 @@ export class Youtube {
      * General YouTube search.
      */
     static async search(query: string, isMusic = true): Promise<YoutubeResult | null> {
-        const searchQuery = isMusic ? `${query} (Official Audio)` : query;
+        const isArabic = /[\u0600-\u06FF]/.test(query);
+        const searchQuery = (isMusic && !isArabic) ? `${query} (Official Audio)` : query;
         const results = await this.searchByQuery(searchQuery);
         return results[0] ?? null;
     }
@@ -59,8 +60,8 @@ export class Youtube {
 
         for (const node of nodes) {
             try {
-
-                const res = await withTimeout(node.rest.resolve(`ytsearch:${query}`), 10000) as any;
+                // Reduced timeout from 10000ms to 2500ms to failover quickly from sluggish nodes
+                const res = await withTimeout(node.rest.resolve(`ytsearch:${query}`), 2500) as any;
                 if (!res || !res.data || res.loadType === 'error' || res.loadType === 'empty') continue;
 
                 const tracks = Array.isArray(res.data) ? res.data : [res.data];

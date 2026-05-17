@@ -162,6 +162,12 @@ export class MetadataService {
         
         track.artistName = finalArtist;
         track.trackTitle = finalTrack;
+
+        // Overwrite the YouTube URL with the strictly validated UTR YouTube link if available
+        if (resolved.links.youtube) {
+            console.log(`[MetadataService] 🔗 Overwriting track URL with strictly validated UTR YouTube link: ${resolved.links.youtube}`);
+            track.url = resolved.links.youtube;
+        }
         
         // Priority 1: High-res track/album artwork from UTR
         // Priority 2: Artist profile picture (better than YouTube thumbnail)

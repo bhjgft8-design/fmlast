@@ -296,7 +296,9 @@ export class TrackResolverService {
         
         // Clean characters that break YouTube search
         const cleanQuery = `${artist} - ${track}`.replace(/[!?]/g, '').trim();
-        const results = await Youtube.searchByQuery(`${cleanQuery} (Official Audio)`);
+        const isArabic = /[\u0600-\u06FF]/.test(cleanQuery);
+        const searchQuery = isArabic ? cleanQuery : `${cleanQuery} (Official Audio)`;
+        const results = await Youtube.searchByQuery(searchQuery);
         
         if (!results || results.length === 0) return null;
 
