@@ -1,4 +1,5 @@
 import { shoukaku } from '../../index';
+import { EventEmitter } from 'events';
 import { Player } from 'shoukaku';
 import { TextChannel, Message } from 'discord.js';
 import { YoutubeResult } from '../api/Youtube';
@@ -37,6 +38,20 @@ export interface GuildQueue {
 const queues = new Map<string, GuildQueue>();
 
 export class QueueManager {
+    private static emitter = new EventEmitter();
+
+    static on(event: string, listener: (...args: any[]) => void): void {
+        this.emitter.on(event, listener);
+    }
+
+    static off(event: string, listener: (...args: any[]) => void): void {
+        this.emitter.off(event, listener);
+    }
+
+    static emit(event: string, ...args: any[]): void {
+        this.emitter.emit(event, ...args);
+    }
+
     static getQueue(guildId: string): GuildQueue | undefined {
         return queues.get(guildId);
     }
@@ -79,6 +94,7 @@ export class QueueManager {
         shoukaku.leaveVoiceChannel(guildId).catch(() => {});
 
         queues.delete(guildId);
+        this.emit('queueDeleted', guildId);
     }
 
     static addTrack(guildId: string, track: YoutubeResult): number {

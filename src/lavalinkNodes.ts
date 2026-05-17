@@ -71,12 +71,7 @@ export const LAVALINK_NODES = [
         auth: 'nyxbot.app/support',
         secure: false
     },
-    {
-        name: 'G3V Node',
-        url: 'lava.g3v.co.uk:9008',
-        auth: 'lavalinklol',
-        secure: false
-    },
+
     {
         name: 'DevamOP Node',
         url: 'lavalink.devamop.in:443',
@@ -89,12 +84,7 @@ export const LAVALINK_NODES = [
         auth: 'freelava.ga',
         secure: false
     },
-    {
-        name: 'NexCloud Node',
-        url: 'n3.nexcloud.in:2026',
-        auth: 'nexcloud',
-        secure: false
-    },
+
     {
         name: 'VexaNode Cloud',
         url: 'omega.vexanode.cloud:2031',
@@ -119,12 +109,7 @@ export const LAVALINK_NODES = [
         auth: 'free',
         secure: false
     },
-    {
-        name: 'Jirayu SSL Node',
-        url: 'lavalink.jirayu.net:443',
-        auth: 'youshallnotpass',
-        secure: true
-    },
+
     {
         name: 'Muzykant v4',
         url: 'lavalink_v4.muzykant.xyz:443',
@@ -143,12 +128,7 @@ export const LAVALINK_NODES = [
         auth: 'https://disutils.com',
         secure: true
     },
-    {
-        name: 'Oreshi Node',
-        url: 'proxy.oreshi.com:2333',
-        auth: 'https://discord.gg/RPCfvBSUuM',
-        secure: false
-    },
+
     {
         name: 'AjieBlogs Non-SSL',
         url: 'lava-v4.ajieblogs.eu.org:80',

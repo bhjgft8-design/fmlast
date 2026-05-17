@@ -8,11 +8,13 @@ import { SlashCommandBuilder,
   TextChannel,
   ButtonStyle
 } from "discord.js";
-import { Youtube } from '../../services/api/Youtube';
+import { Youtube, YoutubeResult } from '../../services/api/Youtube';
 import { MusicPlayer } from '../../services/music/MusicPlayer';
 import { QueueManager } from '../../services/music/QueueManager';
 import { MetadataService } from '../../services/bot/MetadataService';
 import { prisma } from '../../database/client';
+
+const searchCache = new Map<string, { results: YoutubeResult[]; expiresAt: number }>();
 
 export default class SearchCommand extends BaseCommand {
     name = 'search';
@@ -54,7 +56,16 @@ export default class SearchCommand extends BaseCommand {
         if (isSlash) await interactionOrMessage.deferReply();
 
         try {
-            const results = await Youtube.searchByQuery(query);
+            const cacheKey = query.toLowerCase().trim();
+            const cached = searchCache.get(cacheKey);
+            const results = (cached && Date.now() < cached.expiresAt)
+                ? cached.results
+                : await Youtube.searchByQuery(query);
+
+            if (!cached || Date.now() >= cached.expiresAt) {
+                searchCache.set(cacheKey, { results, expiresAt: Date.now() + 60_000 });
+            }
+
             if (results.length === 0) {
                 const builder = new ComponentsV2().addText(`❌ No results found for **${query}**.`);
                 if (isSlash) await interactionOrMessage.editReply(builder.build());
@@ -62,7 +73,17 @@ export default class SearchCommand extends BaseCommand {
                 return;
             }
 
-            const options = results.slice(0, 10).map((track, i) => ({
+            // Filter already-queued tracks from results
+            const queue = QueueManager.getQueue(guildId);
+            const queuedUrls = new Set([
+                queue?.currentTrack?.url,
+                ...(queue?.tracks.map(t => t.url) ?? [])
+            ].filter(Boolean));
+
+            const filteredResults = results.filter(r => !queuedUrls.has(r.url));
+            const displayResults = filteredResults.length > 0 ? filteredResults : results;
+
+            const options = displayResults.slice(0, 10).map((track, i) => ({
                 label: `${i + 1}. ${track.title}`.substring(0, 100),
                 description: `${track.channelTitle} • ${track.duration}`.substring(0, 100),
                 value: i.toString()
@@ -99,9 +120,21 @@ export default class SearchCommand extends BaseCommand {
                 max: 1
             });
 
+            // Cancel collector if bot leaves or queue is cleared mid-search
+            const leaveHandler = (gId: string) => {
+                if (gId === guildId) collector.stop('bot_left');
+            };
+            QueueManager.on('queueDeleted', leaveHandler);
+
             collector.on('collect', async (i: any) => {
+                const currentMember = await interactionOrMessage.guild.members.fetch(i.user.id).catch(() => null);
+                if (!currentMember?.voice?.channel) {
+                    await i.update(new ComponentsV2().addText('❌ You left the voice channel.').build());
+                    return;
+                }
+
                 const index = parseInt(i.values[0]);
-                const track = results[index];
+                const track = displayResults[index];
 
                 const loading = new ComponentsV2().addText(`⏳ Adding **${track.title}** to queue...`);
                 await i.update(loading.build());
@@ -109,21 +142,23 @@ export default class SearchCommand extends BaseCommand {
                 // Fetch DB user for metadata enrichment
                 const dbUser = await prisma.user.findUnique({ where: { discordId: i.user.id } });
 
-                // Enrich track with metadata
-                await MetadataService.enrich(track, member, dbUser);
-
+                // Join and play immediately without waiting for enrichment
                 await MusicPlayer.join(guildId, member.voice.channel.id, interactionOrMessage.channel as TextChannel);
                 const pos = await MusicPlayer.play(guildId, track);
 
-                const displayName = track.artistName && track.trackTitle ? `${track.artistName} - ${track.trackTitle}` : track.title;
+                // Enrich concurrently in the background so search selection is instant!
+                MetadataService.enrich(track, member, dbUser).catch(() => {});
+
+                const displayName = track.title;
                 const finalBuilder = new ComponentsV2()
                     .addText(`✅ **${displayName}** added to queue! ${pos > 0 ? `(Position: ${pos})` : '(Starting playback...)'}`);
                 
                 await i.editReply(finalBuilder.build());
             });
 
-            collector.on('end', (collected) => {
-                if (collected.size === 0) {
+            collector.on('end', (collected, reason) => {
+                QueueManager.off('queueDeleted', leaveHandler);
+                if (collected.size === 0 && reason !== 'bot_left') {
                     const timeout = new ComponentsV2().addText('❌ Search timed out.');
                     message.edit(timeout.build()).catch(() => {});
                 }

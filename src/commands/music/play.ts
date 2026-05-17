@@ -7,6 +7,7 @@ import { prisma } from '../../database/client';
 import { SlashCommandBuilder, TextChannel, GuildMember } from 'discord.js';
 import { ComponentsV2 } from '../../utils/ComponentsV2';
 import { MetadataService } from '../../services/bot/MetadataService';
+import { MusicUIController } from '../../services/music/MusicUIController';
 
 export default class PlayCommand extends BaseCommand {
     name = 'play';
@@ -118,7 +119,7 @@ export default class PlayCommand extends BaseCommand {
                     return;
                 }
 
-                if (res.position === 1) {
+                if (res.position === 0) {
                     if (isSlash) await interactionOrMessage.deleteReply().catch(() => { });
                 } else {
                     const builder = new ComponentsV2()
@@ -147,14 +148,23 @@ export default class PlayCommand extends BaseCommand {
             result.trackTitle = name;
         }
 
-        await MetadataService.enrich(result, member, dbUser);
+        // Enrich concurrently in the background so the play command response is instant!
+        MetadataService.enrich(result, member, dbUser)
+            .then(() => {
+                // If it is the current track in the queue, dynamically update Now Playing UI!
+                const queue = QueueManager.getQueue(guildId);
+                if (queue && queue.currentTrack?.id === result.id) {
+                    MusicUIController.updateNowPlayingMessage(guildId).catch(() => {});
+                }
+            })
+            .catch(() => {});
 
         const queuePos = await MusicPlayer.play(guildId, result);
 
         return {
             position: queuePos,
-            artist: result.artistName!,
-            track: result.trackTitle!,
+            artist: result.artistName || result.channelTitle,
+            track: result.trackTitle || result.title,
             artworkUrl: result.artworkUrl || null
         };
     }

@@ -2,6 +2,7 @@ import { shoukaku } from '../../index';
 import YouTubeSR from 'youtube-sr';
 import { formatDuration } from '../../utils/formatDuration';
 import { Readable } from 'node:stream';
+import { degradedNodes, sortNodesByQuality } from '../music/DegradedNodes';
 
 export interface YoutubeResult {
     title: string;
@@ -39,16 +40,63 @@ export class Youtube {
      * General YouTube search.
      */
     static async search(query: string, isMusic = true): Promise<YoutubeResult | null> {
+        const isUrl = /^https?:\/\//.test(query);
+        if (isUrl) {
+            const results = await this.searchByQuery(query);
+            return results[0] ?? null;
+        }
+
         const isArabic = /[\u0600-\u06FF]/.test(query);
         const searchQuery = (isMusic && !isArabic) ? `${query} (Official Audio)` : query;
         const results = await this.searchByQuery(searchQuery);
         return results[0] ?? null;
     }
 
+    private static async searchViaGoogleApi(query: string): Promise<YoutubeResult[]> {
+        const key = process.env.YOUTUBE_API_KEY;
+        if (!key) return [];
+
+        try {
+            const axios = (await import('axios')).default;
+            const { data } = await axios.get('https://www.googleapis.com/youtube/v3/search', {
+                params: {
+                    part: 'snippet',
+                    q: query,
+                    maxResults: 5,
+                    type: 'video',
+                    key: key
+                },
+                timeout: 3000
+            });
+
+            if (!data.items || data.items.length === 0) return [];
+
+            return data.items.map((item: any) => ({
+                title: item.snippet.title,
+                url: `https://www.youtube.com/watch?v=${item.id.videoId}`,
+                id: item.id.videoId,
+                thumbnail: item.snippet.thumbnails?.high?.url || item.snippet.thumbnails?.default?.url || `https://img.youtube.com/vi/${item.id.videoId}/hqdefault.jpg`,
+                channelTitle: item.snippet.channelTitle
+            }));
+        } catch (err: any) {
+            console.warn(`[Youtube API] Search failed:`, err.message);
+            return [];
+        }
+    }
+
     public static async searchByQuery(query: string): Promise<YoutubeResult[]> {
-        const nodes = Array.from(shoukaku.nodes.values())
-            .filter(node => node && node.state === 1)
-            .sort((a, b) => (a.penalties || 0) - (b.penalties || 0));
+        const isUrl = /^https?:\/\//.test(query);
+
+        // 1. Try the official Google YouTube API first if it is a text search query!
+        if (!isUrl && process.env.YOUTUBE_API_KEY) {
+            const apiResults = await this.searchViaGoogleApi(query);
+            if (apiResults.length > 0) {
+                return apiResults;
+            }
+        }
+
+        // 2. Fall back to Lavalink resolve
+        const nodes = sortNodesByQuality(shoukaku.nodes);
         
         // Helper for timeout
         const withTimeout = (promise: Promise<any>, ms: number) => {
@@ -58,10 +106,12 @@ export class Youtube {
             ]);
         };
 
+        const resolveQuery = isUrl ? query : `ytsearch:${query}`;
+
         for (const node of nodes) {
             try {
-                // Reduced timeout from 10000ms to 2500ms to failover quickly from sluggish nodes
-                const res = await withTimeout(node.rest.resolve(`ytsearch:${query}`), 2500) as any;
+                // Reduced timeout to 2500ms to failover quickly from sluggish nodes
+                const res = await withTimeout(node.rest.resolve(resolveQuery), 2500) as any;
                 if (!res || !res.data || res.loadType === 'error' || res.loadType === 'empty') continue;
 
                 const tracks = Array.isArray(res.data) ? res.data : [res.data];
@@ -76,6 +126,7 @@ export class Youtube {
                 }));
             } catch (error) {
                 console.warn(`[Youtube] Search failed/timed out on node ${node.name}: ${error instanceof Error ? error.message : String(error)}`);
+                degradedNodes.set(node.name, Date.now());
             }
         }
 

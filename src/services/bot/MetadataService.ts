@@ -4,10 +4,31 @@ import { LastFM } from '../api/LastFM';
 import { GuildMember } from 'discord.js';
 
 export class MetadataService {
+    private static inFlight = new Map<string, Promise<void>>();
+
     /**
      * Enriches a YoutubeResult with high-res artwork, cleaned names, and Last.fm stats.
      */
-    static async enrich(track: YoutubeResult, member: GuildMember, dbUser?: any): Promise<void> {
+    static async enrich(track: YoutubeResult, member: GuildMember | null, dbUser?: any): Promise<void> {
+        if ((track as any).isEnriched) return;
+
+        // Deduplicate concurrent calls for the same track
+        const key = track.url || track.title;
+        if (this.inFlight.has(key)) {
+            return this.inFlight.get(key)!;
+        }
+
+        const promise = this._doEnrich(track, member, dbUser).finally(() => {
+            this.inFlight.delete(key);
+        });
+
+        this.inFlight.set(key, promise);
+        return promise;
+    }
+
+    private static async _doEnrich(track: YoutubeResult, member: GuildMember | null, dbUser?: any): Promise<void> {
+        if ((track as any).isEnriched) return;
+        
         // Resolve High-Res Artwork and Cleaned Names
         let finalArtist = track.artistName || '';
         let finalTrack = track.trackTitle || '';
@@ -163,8 +184,12 @@ export class MetadataService {
         track.artistName = finalArtist;
         track.trackTitle = finalTrack;
 
-        // Overwrite the YouTube URL with the strictly validated UTR YouTube link if available
-        if (resolved.links.youtube) {
+        // Overwrite the track URL with the strictly validated UTR links.
+        // We prefer Spotify URL if available to leverage native LavaSrc, falling back to YouTube.
+        if (resolved.links.spotify) {
+            console.log(`[MetadataService] 🔗 Overwriting track URL with strictly validated UTR Spotify link (LavaSrc): ${resolved.links.spotify}`);
+            track.url = resolved.links.spotify;
+        } else if (resolved.links.youtube) {
             console.log(`[MetadataService] 🔗 Overwriting track URL with strictly validated UTR YouTube link: ${resolved.links.youtube}`);
             track.url = resolved.links.youtube;
         }
@@ -213,5 +238,6 @@ export class MetadataService {
         track.statsText = statsText;
         track.requesterName = member?.user?.displayName || track.requesterName || 'Unknown';
         if (finalDuration) track.duration = finalDuration;
+        (track as any).isEnriched = true;
     }
 }

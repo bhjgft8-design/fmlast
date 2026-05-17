@@ -10,6 +10,7 @@ import { Shoukaku, Connectors } from 'shoukaku';
 import http from 'http';
 import dns from 'dns';
 import './services/bot/QueueWorker'; // Initialize background worker immediately
+import { lavaSrcNodes } from './services/music/NodeCapabilities';
 
 // Force use of reliable DNS servers to bypass local ENOTFOUND issues
 dns.setServers(['8.8.8.8', '1.1.1.1', '8.8.4.4']);
@@ -34,6 +35,13 @@ export const shoukaku = new Shoukaku(new Connectors.DiscordJS(client), config.LA
     restTimeout: 15000
 });
 
+// Override default node resolver to deprioritize degraded nodes
+import { sortNodesByQuality } from './services/music/DegradedNodes';
+shoukaku.options.nodeResolver = (nodes) => {
+    const sorted = sortNodesByQuality(nodes);
+    return sorted[0];
+};
+
 shoukaku.on('error', (name, error) => {
     // Silence common connection spam, only log critical errors
     const msg = error.message || String(error);
@@ -42,7 +50,21 @@ shoukaku.on('error', (name, error) => {
     }
     console.error(`[Lavalink] Node ${name} error:`, msg);
 });
-shoukaku.on('ready', (name) => console.log(`[Lavalink] 🟢 Node ${name} is ready!`));
+shoukaku.on('ready', async (name) => {
+    console.log(`[Lavalink] 🟢 Node ${name} is ready!`);
+    
+    // Probe for LavaSrc support
+    const node = shoukaku.nodes.get(name);
+    if (node) {
+        try {
+            const res = await node.rest.resolve('spsearch:test') as any;
+            if (res && res.loadType !== 'error' && res.loadType !== 'empty') {
+                lavaSrcNodes.add(name);
+                console.log(`[Lavalink] ✅ Node ${name} supports LavaSrc (Spotify)`);
+            }
+        } catch {}
+    }
+});
 shoukaku.on('close', (name, code, reason) => {
     if (code !== 1000) console.warn(`[Lavalink] 🟡 Node ${name} closed (Code: ${code})`);
 });
