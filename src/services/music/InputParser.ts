@@ -3,7 +3,7 @@ import { Youtube } from '../api/Youtube';
 import { LastFM } from '../api/LastFM';
 
 export interface ParsedInputResult {
-    tracks: { name: string; artist: string; url?: string }[];
+    tracks: { name: string; artist: string; url?: string; id?: string }[];
     collectionName: string;
 }
 

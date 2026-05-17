@@ -401,6 +401,15 @@ export class MusicPlayer {
                 queue.inactivityTimer = undefined;
             }
 
+            // On-the-fly UTR metadata enrichment if not already done
+            if (!track.artworkUrl) {
+                console.log(`[MusicPlayer] ⚡ Dynamic UTR metadata enrichment for: ${track.title}`);
+                const { MetadataService } = await import('../bot/MetadataService');
+                await MetadataService.enrich(track, null, null).catch(err => {
+                    console.warn(`[MusicPlayer] Dynamic enrichment failed for ${track.title}:`, err);
+                });
+            }
+
             console.log(`[MusicPlayer] 🎵 Preparing to play: ${track.title}`);
             const { LyricsService } = await import('./LyricsService');
             LyricsService.cleanupForGuild(guildId);

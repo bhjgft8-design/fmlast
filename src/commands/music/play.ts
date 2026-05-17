@@ -1,6 +1,7 @@
 import { BaseCommand } from '../../structures/BaseCommand';
 import { Youtube } from '../../services/api/Youtube';
 import { MusicPlayer } from '../../services/music/MusicPlayer';
+import { QueueManager } from '../../services/music/QueueManager';
 import { InputParser } from '../../services/music/InputParser';
 import { prisma } from '../../database/client';
 import { SlashCommandBuilder, TextChannel, GuildMember } from 'discord.js';
@@ -72,9 +73,29 @@ export default class PlayCommand extends BaseCommand {
                 }
 
                 let queuedCount = 0;
-                for (const t of tracksToProcess) {
-                    const result = await this.resolveAndQueue(guildId, t.name, t.artist, member, dbUser, t.url);
-                    if (result) queuedCount++;
+                
+                // 1. Resolve and queue the first track immediately to start playback instantly
+                const first = tracksToProcess[0];
+                const firstResult = await this.resolveAndQueue(guildId, first.name, first.artist, member, dbUser, first.url);
+                if (firstResult) queuedCount++;
+
+                // 2. Queue the remaining tracks instantly as un-resolved track objects
+                for (let i = 1; i < tracksToProcess.length; i++) {
+                    const t = tracksToProcess[i];
+                    const trackObj = {
+                        id: t.id || String(Math.random()),
+                        title: t.artist ? `${t.artist} - ${t.name}` : t.name,
+                        url: t.url || '',
+                        thumbnail: '',
+                        channelTitle: t.artist || '',
+                        artistName: t.artist || '',
+                        trackTitle: t.name,
+                        requesterName: member.displayName,
+                        requesterId: member.id
+                    };
+                    // Queue instantly in data manager without triggering redundant playback loops
+                    QueueManager.addTrack(guildId, trackObj);
+                    queuedCount++;
                 }
 
                 const finalBuilder = new ComponentsV2()

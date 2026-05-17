@@ -563,28 +563,32 @@ export class Spotify {
 
     /** Get tracks from a Spotify playlist */
     static async getPlaylistTracks(playlistId: string): Promise<{ name: string; artist: string; id: string }[]> {
-        if (this.isDisabled()) return [];
-
         try {
-            const token = await this.getToken();
-            // Note: We're using fields to reduce the payload size
-            const { data } = await axios.get(`https://api.spotify.com/v1/playlists/${playlistId}/tracks`, {
-                headers: { Authorization: `Bearer ${token}` },
-                params: { 
-                    limit: 100,
-                    fields: 'items(track(name,id,artists(name)))'
+            const { data } = await axios.get(`https://open.spotify.com/embed/playlist/${playlistId}`, {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
                 }
             });
+            
+            const match = data.match(/<script id="__NEXT_DATA__" type="application\/json">(.*?)<\/script>/s);
+            if (!match) {
+                console.warn("[Spotify Embed] Could not find __NEXT_DATA__ script tag for playlist:", playlistId);
+                return [];
+            }
 
-            return (data.items || [])
-                .filter((i: any) => i.track)
-                .map((i: any) => ({
-                    name: i.track.name,
-                    artist: i.track.artists?.[0]?.name || 'Unknown Artist',
-                    id: i.track.id
-                }));
+            const json = JSON.parse(match[1]);
+            const trackList = json.props?.pageProps?.state?.data?.entity?.trackList || [];
+            
+            return trackList.map((t: any) => {
+                const id = t.uri ? t.uri.split(':').pop() || '' : '';
+                return {
+                    name: t.title || 'Unknown Track',
+                    artist: t.subtitle || 'Unknown Artist',
+                    id: id
+                };
+            });
         } catch (err: any) {
-            this.handleApiError(err);
+            console.error("[Spotify Embed] Failed to fetch playlist tracks:", err.message);
             return [];
         }
     }
