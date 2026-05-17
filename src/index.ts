@@ -29,7 +29,8 @@ export const client = new Client({
 export const shoukaku = new Shoukaku(new Connectors.DiscordJS(client), config.LAVALINK_NODES, {
     moveOnDisconnect: true,
     resume: true,
-    reconnectTries: 5,
+    reconnectTries: 100,
+    reconnectInterval: 10000,
     restTimeout: 15000
 });
 
@@ -49,6 +50,35 @@ shoukaku.on('disconnect', (name, players) => {
     // Silent disconnects are handled by shoukaku's moveOnDisconnect
 });
 
+// Periodic check to revive nodes that completely died after retries exhausted
+setInterval(() => {
+    for (const node of config.LAVALINK_NODES) {
+        if (!shoukaku.nodes.has(node.name)) {
+            try {
+                shoukaku.addNode(node);
+                // Silently attempt to re-add
+            } catch (e) {
+                // Ignore
+            }
+        }
+    }
+}, 60000); // Check every minute
+
+// Periodic log of connected nodes and their ping/quality
+const logNodes = () => {
+    const activeNodes = Array.from(shoukaku.nodes.values());
+    if (activeNodes.length === 0) return;
+    
+    console.log(`\n--- [Lavalink] Active Nodes Status ---`);
+    activeNodes.forEach(node => {
+        const penalty = node.penalties || 0;
+        const players = node.stats ? node.stats.players : 0;
+        console.log(`- ${node.name}: Penalty Score: ${penalty} | Active Players: ${players}`);
+    });
+    console.log(`--------------------------------------\n`);
+};
+
+setInterval(logNodes, 5 * 60 * 60 * 1000); // Check every 5 hours
 async function bootstrap() {
     // 1. Initialize Databases
     await MongoService.connect();

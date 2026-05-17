@@ -27,32 +27,24 @@ export class MusicPlayer {
         let queue = QueueManager.getQueue(guildId);
 
         if (!queue || !queue.player) {
-            const nodes = shoukaku.nodes;
             let player: Player | undefined;
-            let lastError;
 
-            for (const [name, node] of nodes) {
-                try {
-                    console.log(`[MusicPlayer] 🛰️ Attempting to join voice using node: ${name}`);
-                    const guild = client.guilds.cache.get(guildId);
-                    const shardId = guild?.shardId ?? 0;
+            try {
+                console.log(`[MusicPlayer] 🛰️ Attempting to join voice...`);
+                const guild = client.guilds.cache.get(guildId);
+                const shardId = guild?.shardId ?? 0;
 
-                    player = await shoukaku.joinVoiceChannel({
-                        guildId: guildId,
-                        channelId: voiceChannelId,
-                        shardId: shardId,
-                        deaf: true
-                    });
-                    console.log(`[MusicPlayer] ✅ Successfully joined using node: ${name}`);
-                    break; 
-                } catch (err: any) {
-                    console.warn(`[MusicPlayer] ⚠️ Failed to join using node ${name}: ${err.message}`);
-                    lastError = err;
-                    continue;
-                }
+                player = await shoukaku.joinVoiceChannel({
+                    guildId: guildId,
+                    channelId: voiceChannelId,
+                    shardId: shardId,
+                    deaf: true
+                });
+                console.log(`[MusicPlayer] ✅ Successfully joined using node: ${player.node.name}`);
+            } catch (err: any) {
+                console.error(`[MusicPlayer] ❌ Failed to join voice channel: ${err.message}`);
+                throw err;
             }
-
-            if (!player) throw lastError || new Error('All music nodes failed to join voice.');
 
             if (!queue) {
                 queue = QueueManager.createQueue(guildId, textChannel, voiceChannelId, player);
@@ -407,11 +399,12 @@ export class MusicPlayer {
 
             if (!queue.player) throw new Error('Player not initialized');
             
-            const nodes = Array.from(shoukaku.nodes.values());
+            const nodes = Array.from(shoukaku.nodes.values())
+                .filter(node => node.state === 1)
+                .sort((a, b) => (a.penalties || 0) - (b.penalties || 0));
             let lavalinkTrack = null;
 
             for (const node of nodes) {
-                if (node.state !== 1) continue;
                 try {
                     let res;
                     const searchStr = track.artistName && track.trackTitle ? `${track.artistName} ${track.trackTitle}` : track.title;

@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { LAVALINK_NODES } from './src/lavalinkNodes';
 
 export const config = {
     DISCORD_TOKEN: process.env.DISCORD_TOKEN!,
@@ -25,35 +26,14 @@ export const config = {
     YT_PLAYLIST_TIMEOUT_MS: 30000,
     INACTIVITY_TIMEOUT: 300, // 5 minutes
     // Lavalink Settings
-    LAVALINK_NODES: [
-        {
-            name: 'Serenetia (v4)',
-            url: 'lavalinkv4.serenetia.com:443',
-            auth: 'https://seretia.link/discord',
-            secure: true
-        },
-        {
-            name: 'Trinium (v4)',
-            url: 'lavalink-v4.triniumhost.com:443',
-            auth: 'free',
-            secure: true
-        },
-        {
-            name: 'Millohost (v4)',
-            url: 'lava-v4.millohost.my.id:443',
-            auth: 'https://discord.gg/mjS5J2K3ep',
-            secure: true
-        }
-    ],
+    LAVALINK_NODES,
     // Puppeteer Settings
     PUPPETEER: {
         POOL_SIZE: 1, // Reduced for Railway RAM savings
         WARMUP: true,
     },
-    
-    
-    
+
+
+
     COBALT_URL: process.env.COBALT_URL,
-
-
 };

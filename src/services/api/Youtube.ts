@@ -45,7 +45,9 @@ export class Youtube {
     }
 
     public static async searchByQuery(query: string): Promise<YoutubeResult[]> {
-        const nodes = Array.from(shoukaku.nodes.values());
+        const nodes = Array.from(shoukaku.nodes.values())
+            .filter(node => node && node.state === 1)
+            .sort((a, b) => (a.penalties || 0) - (b.penalties || 0));
         
         // Helper for timeout
         const withTimeout = (promise: Promise<any>, ms: number) => {
@@ -57,7 +59,6 @@ export class Youtube {
 
         for (const node of nodes) {
             try {
-                if (!node || node.state !== 1) continue; // 1 = CONNECTED
 
                 const res = await withTimeout(node.rest.resolve(`ytsearch:${query}`), 10000) as any;
                 if (!res || !res.data || res.loadType === 'error' || res.loadType === 'empty') continue;
