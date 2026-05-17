@@ -418,3 +418,15 @@ model RaidContribution {
   @@unique([raidId, userId])
   @@map("raid_contributions")
 }
+
+model QueueSnapshot {
+  guildId        String   @id @map("guild_id")
+  voiceChannelId String   @map("voice_channel_id")
+  textChannelId  String   @map("text_channel_id")
+  currentTrack   String   @map("current_track") @db.Text
+  tracks         String   @map("tracks") @db.Text
+  positionMs     Int      @map("position_ms")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@map("queue_snapshots")
+}

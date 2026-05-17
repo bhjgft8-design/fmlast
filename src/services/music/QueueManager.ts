@@ -4,6 +4,7 @@ import { Player } from 'shoukaku';
 import { TextChannel, Message } from 'discord.js';
 import { YoutubeResult } from '../api/Youtube';
 import { config } from '../../../config';
+import { PlayerStateMachine } from './PlayerStateMachine';
 
 export type RepeatMode = 'off' | 'one' | 'all';
 
@@ -15,8 +16,12 @@ export interface GuildQueue {
     currentTrack: YoutubeResult | null;
     lastPlayedTrack?: YoutubeResult | null;
     lastStart?: number;
+    state: PlayerStateMachine;
+    lastKnownPosition?: number;
+    lastPositionTimestamp?: number;
     isPlaying: boolean;
     isPaused: boolean;
+    isRecovering?: boolean;
     repeatMode: RepeatMode;
     repeatCount: number;
     consecutiveErrors: number;
@@ -32,7 +37,6 @@ export interface GuildQueue {
     autoplay?: boolean;
     lastUpdate?: number;
     lastHeartbeat?: number;   // Timestamp of last player audio update (for watchdog)
-    isRecovering?: boolean;   // Lock to prevent concurrent recovery attempts
 }
 
 const queues = new Map<string, GuildQueue>();
@@ -72,6 +76,7 @@ export class QueueManager {
             player,
             tracks: [],
             currentTrack: null,
+            state: new PlayerStateMachine(guildId),
             isPlaying: false,
             isPaused: false,
             repeatMode: 'off',

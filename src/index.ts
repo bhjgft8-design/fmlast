@@ -114,6 +114,58 @@ const logNodes = () => {
 };
 
 setInterval(logNodes, 5 * 60 * 60 * 1000); // Check every 5 hours
+
+// Proactive node probing every 2 minutes
+setInterval(async () => {
+    try {
+        const { recordSuccess, recordFailure } = await import('./services/music/NodeCircuitBreaker');
+        for (const node of shoukaku.nodes.values()) {
+            if (node.state !== 1) continue;
+            try {
+                const res = await Promise.race([
+                    node.rest.resolve('ytsearch:test'),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 2500))
+                ]);
+                if (res) {
+                    recordSuccess(node.name);
+                } else {
+                    recordFailure(node.name);
+                }
+            } catch {
+                recordFailure(node.name);
+            }
+        }
+    } catch { /* ignore */ }
+}, 120000);
+
+// Capture bot kicks and moves from voice channels
+client.on('voiceStateUpdate', async (oldState, newState) => {
+    const selfId = client.user?.id;
+    if (!selfId) return;
+
+    if (oldState.member?.id === selfId) {
+        const guildId = oldState.guild.id;
+        try {
+            const { QueueManager } = await import('./services/music/QueueManager');
+            const { MusicPlayer } = await import('./services/music/MusicPlayer');
+            const queue = QueueManager.getQueue(guildId);
+            if (!queue) return;
+
+            // 1. Kicked from channel
+            if (oldState.channelId && !newState.channelId) {
+                console.log(`[VoiceState] Bot was kicked from voice channel in guild ${guildId}. Cleaning up.`);
+                MusicPlayer.stop(guildId);
+            }
+            // 2. Moved to another channel
+            else if (oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
+                console.log(`[VoiceState] Bot was moved to channel ${newState.channelId} in guild ${guildId}. Recovering...`);
+                queue.voiceChannelId = newState.channelId;
+                MusicPlayer.recoverPlayback(guildId).catch(() => {});
+            }
+        } catch { /* ignore */ }
+    }
+});
+
 async function bootstrap() {
     // 1. Initialize Databases
     await MongoService.connect();
@@ -130,6 +182,29 @@ async function bootstrap() {
     // 4. Login
     await client.login(config.DISCORD_TOKEN);
 
+    // Restore queue snapshots from database
+    client.once('ready', async () => {
+        setTimeout(async () => {
+            try {
+                const { prisma } = await import('./database/client');
+                const { MusicPlayer } = await import('./services/music/MusicPlayer');
+                const snaps = await prisma.queueSnapshot.findMany({});
+                if (snaps.length > 0) {
+                    console.log(`[Snapshot] Found ${snaps.length} queue snapshot(s) to restore.`);
+                    for (const snap of snaps) {
+                        console.log(`[Snapshot] Restoring queue for guild ${snap.guildId}...`);
+                        await MusicPlayer.restoreFromSnapshot(snap).catch(e => {
+                            console.error(`[Snapshot] Failed to restore guild ${snap.guildId}:`, e);
+                        });
+                    }
+                    await prisma.queueSnapshot.deleteMany({});
+                }
+            } catch (err) {
+                console.error('[Snapshot] Failed to restore queue snapshots:', err);
+            }
+        }, 5000);
+    });
+
     // 5. Post-Login Initialization
     await initBotProfile();
 
@@ -142,6 +217,42 @@ async function bootstrap() {
         res.end('Bot is alive');
     }).listen(process.env.PORT || 3000);
 }
+
+async function handleShutdown() {
+    console.log('[Bot] 🛑 Shutdown signal received. Saving queue snapshots...');
+    try {
+        const { QueueManager } = await import('./services/music/QueueManager');
+        const { MusicPlayer } = await import('./services/music/MusicPlayer');
+        const { prisma } = await import('./database/client');
+
+        const activeQueues = QueueManager.getAllQueues();
+        await prisma.queueSnapshot.deleteMany({});
+
+        for (const [guildId, queue] of activeQueues) {
+            if (queue.currentTrack) {
+                const positionMs = MusicPlayer.getPosition(queue);
+                await prisma.queueSnapshot.create({
+                    data: {
+                        guildId,
+                        voiceChannelId: queue.voiceChannelId,
+                        textChannelId: queue.textChannel.id,
+                        currentTrack: JSON.stringify(queue.currentTrack),
+                        tracks: JSON.stringify(queue.tracks),
+                        positionMs
+                    }
+                });
+                console.log(`[Snapshot] Saved queue snapshot for guild ${guildId} at position ${positionMs}ms`);
+            }
+        }
+    } catch (err) {
+        console.error('[Shutdown] Failed to save queue snapshots:', err);
+    } finally {
+        process.exit(0);
+    }
+}
+
+process.on('SIGTERM', handleShutdown);
+process.on('SIGINT', handleShutdown);
 
 bootstrap().catch(err => {
     console.error('Fatal bootstrap error:', err);

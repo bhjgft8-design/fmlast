@@ -1,3 +1,5 @@
+import { isAvailable } from './NodeCircuitBreaker';
+
 export const degradedNodes = new Map<string, number>(); // nodeName -> timestamp of failure
 
 export const nodeStats = new Map<string, { hits: number; misses: number; avgMs: number }>();
@@ -13,7 +15,7 @@ export function recordNodeResult(name: string, success: boolean, ms: number): vo
 export function sortNodesByQuality(shoukakuNodes: any): any[] {
     const now = Date.now();
     const allNodes = Array.from(shoukakuNodes.values() as Iterable<any>)
-        .filter((node: any) => node && node.state === 1);
+        .filter((node: any) => node && node.state === 1 && isAvailable(node.name));
         
     return allNodes.sort((a: any, b: any) => {
         const aDegraded = degradedNodes.has(a.name) && (now - degradedNodes.get(a.name)! < 300000); // 5 minutes

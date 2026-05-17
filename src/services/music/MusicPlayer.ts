@@ -12,11 +12,8 @@ import { MusicUIController } from './MusicUIController';
 import { degradedNodes, sortNodesByQuality, recordNodeResult } from './DegradedNodes';
 import { ResolutionCache } from '../../utils/ResolutionCache';
 import { lavaSrcNodes } from './NodeCapabilities';
-
-/**
- * Global mutex for each guild to ensure only one playback process runs at a time.
- */
-const playbackMutex = new Map<string, boolean>();
+import { playbackLock } from '../../utils/AsyncLock';
+import { prisma } from '../../database/client';
 
 const ARTIST_OVERRIDES: Record<string, { cluster: string, related?: string[] }> = {
     'zaf': {
@@ -68,6 +65,7 @@ export class MusicPlayer {
         // Migrate player to the winning node if it's different
         if (player && currentPlayerNodeName && node.name !== currentPlayerNodeName) {
             console.log(`[MusicPlayer] 🔀 Migrating player from "${currentPlayerNodeName}" to "${node.name}"`);
+            (player as any).track = null; // Clear track to prevent Shoukaku from auto-resuming the old failed track
             await player.move(node.name).catch(() => {});
         }
 
@@ -176,15 +174,49 @@ export class MusicPlayer {
         return false;
     }
 
+    static cleanupGuild(guildId: string) {
+        const queue = QueueManager.getQueue(guildId);
+        if (!queue) return;
+
+        // Intervals
+        if (queue.progressInterval) {
+            clearInterval(queue.progressInterval);
+            queue.progressInterval = undefined;
+        }
+        if (queue.inactivityTimer) {
+            clearTimeout(queue.inactivityTimer);
+            queue.inactivityTimer = undefined;
+        }
+
+        // Watchdog
+        const watchdog = this.watchdogIntervals.get(guildId);
+        if (watchdog) {
+            clearInterval(watchdog);
+            this.watchdogIntervals.delete(guildId);
+        }
+
+        // Player listeners
+        queue.player?.removeAllListeners();
+
+        // Prefetch cache entries for this guild's tracks
+        queue.tracks.forEach(t => MusicPlayer.prefetchCache.delete(t.url || t.title));
+    }
+
+    static getPosition(queue: GuildQueue): number {
+        if (!queue.lastKnownPosition || !queue.lastPositionTimestamp) return 0;
+        if (queue.state.is('paused')) return queue.lastKnownPosition;
+        return queue.lastKnownPosition + (Date.now() - queue.lastPositionTimestamp);
+    }
+
     static stop(guildId: string) {
         const queue = QueueManager.getQueue(guildId);
         if (queue) {
+            queue.state.transition('stopped');
             VoiceStatusService.clearStatus(client, queue.voiceChannelId);
             VoiceStatusService.updatePresence(client, null);
+            this.cleanupGuild(guildId);
         }
-        this.stopWatchdog(guildId);
         QueueManager.deleteQueue(guildId);
-        playbackMutex.delete(guildId);
         return true;
     }
 
@@ -200,8 +232,9 @@ export class MusicPlayer {
 
     static pause(guildId: string) {
         const queue = QueueManager.getQueue(guildId);
-        if (queue && queue.player && !queue.isPaused) {
+        if (queue && queue.player && !queue.state.is('paused')) {
             queue.player.setPaused(true);
+            queue.state.transition('paused');
             queue.isPaused = true;
             this.stopProgressUpdate(guildId);
             MusicUIController.updateNowPlayingMessage(guildId);
@@ -212,14 +245,69 @@ export class MusicPlayer {
 
     static resume(guildId: string) {
         const queue = QueueManager.getQueue(guildId);
-        if (queue && queue.player && queue.isPaused) {
+        if (queue && queue.player && queue.state.is('paused')) {
             queue.player.setPaused(false);
+            queue.state.transition('playing');
             queue.isPaused = false;
             this.startProgressUpdate(guildId);
             MusicUIController.updateNowPlayingMessage(guildId);
             return true;
         }
         return false;
+    }
+
+    static async restoreFromSnapshot(snap: any) {
+        const guild = client.guilds.cache.get(snap.guildId);
+        if (!guild) return;
+
+        const textChannel = guild.channels.cache.get(snap.textChannelId) as TextChannel;
+        if (!textChannel) return;
+
+        try {
+            const currentTrack = JSON.parse(snap.currentTrack);
+            const tracks = JSON.parse(snap.tracks);
+            
+            // Join channel
+            const queue = await this.join(snap.guildId, snap.voiceChannelId, textChannel);
+            if (!queue) return;
+
+            // Re-populate queue
+            queue.currentTrack = currentTrack;
+            queue.tracks = tracks;
+            
+            // Resolve track on the best available node
+            const nodes = sortNodesByQuality(shoukaku.nodes);
+            let lavalinkTrack = null;
+            if (currentTrack.url) {
+                lavalinkTrack = await this.resolveOnBestNode(nodes, currentTrack.url);
+            }
+            if (!lavalinkTrack) {
+                const searchStr = currentTrack.artistName && currentTrack.trackTitle ? `${currentTrack.artistName} ${currentTrack.trackTitle}` : currentTrack.title;
+                lavalinkTrack = await this.resolveOnBestNode(nodes, `spsearch:${searchStr}`);
+            }
+
+            if (lavalinkTrack?.encoded) {
+                queue.isPlaying = true;
+                queue.state.transition('playing');
+                queue.lastPlayedTrack = currentTrack;
+                this.setupPlayerEvents(snap.guildId);
+                
+                await queue.player?.playTrack({ track: { encoded: lavalinkTrack.encoded } });
+                
+                if (snap.positionMs > 2000) {
+                    await new Promise(r => setTimeout(r, 1000));
+                    await queue.player?.seekTo(snap.positionMs).catch(() => {});
+                }
+                
+                const mins = Math.floor(snap.positionMs / 60000);
+                const secs = String(Math.floor((snap.positionMs % 60000) / 1000)).padStart(2, '0');
+                textChannel.send(
+                    `🔄 **Playback restored** after bot restart — resuming **${currentTrack.artistName || ''} ${currentTrack.trackTitle || currentTrack.title}** from \`${mins}:${secs}\``
+                ).catch(() => {});
+            }
+        } catch (err: any) {
+            console.error(`[Snapshot] Restore failed for guild ${snap.guildId}:`, err);
+        }
     }
 
     static async getLyrics(guildId: string): Promise<any | null> {
@@ -437,12 +525,7 @@ export class MusicPlayer {
         const queue = QueueManager.getQueue(guildId);
         if (!queue) return;
 
-        if (playbackMutex.get(guildId)) {
-            console.log(`[MusicPlayer] ⏳ processQueue already running for guild ${guildId}, skipping.`);
-            return;
-        }
-        playbackMutex.set(guildId, true);
-
+        const release = await playbackLock.acquire(guildId);
         try {
             if (_skipCount > 5) {
                 console.warn(`[MusicPlayer] 🛑 Too many consecutive failures for guild ${guildId}, stopping.`);
@@ -450,12 +533,12 @@ export class MusicPlayer {
                 return;
             }
 
-            if (queue.isPlaying) {
-                console.log(`[MusicPlayer] ⏩ Already playing in guild ${guildId}, skipping processQueue.`);
-                playbackMutex.delete(guildId);
+            if (queue.state.is('playing') || queue.state.is('loading')) {
+                console.log(`[MusicPlayer] ⏩ Already playing/loading in guild ${guildId}, skipping processQueue.`);
                 return;
             }
 
+            queue.state.transition('loading');
             this.stopProgressUpdate(guildId);
 
             let track = QueueManager.getNextTrack(guildId) || QueueManager.getNextMixTrack(guildId);
@@ -469,12 +552,13 @@ export class MusicPlayer {
                 console.log(`[MusicPlayer] 🏁 Queue concluded for guild ${guildId}.`);
                 queue.currentTrack = null;
                 queue.isPlaying = false;
+                queue.state.transition('idle');
                 queue.textChannel.send('✅ **Queue concluded.** Disconnecting in 5 minutes if inactive.').catch(() => { });
 
                 if (queue.inactivityTimer) clearTimeout(queue.inactivityTimer);
                 queue.inactivityTimer = setTimeout(() => {
                     const refreshed = QueueManager.getQueue(guildId);
-                    if (refreshed && !refreshed.isPlaying && refreshed.tracks.length === 0) {
+                    if (refreshed && !refreshed.state.is('playing') && refreshed.tracks.length === 0) {
                         this.stop(guildId);
                     }
                 }, config.INACTIVITY_TIMEOUT * 1000);
@@ -544,7 +628,7 @@ export class MusicPlayer {
                     const searchStr = track.artistName && track.trackTitle ? `${track.artistName} ${track.trackTitle}` : track.title;
                     
                     const prefixes = attempts > 0
-                        ? ['spsearch:', 'scsearch:']
+                        ? ['spsearch:', 'ytmsearch:', 'ytsearch:', 'scsearch:']
                         : ['spsearch:', 'ytmsearch:', 'ytsearch:'];
 
                     for (const prefix of prefixes) {
@@ -563,7 +647,8 @@ export class MusicPlayer {
             if (!lavalinkTrack || !lavalinkTrack.encoded) {
                 console.warn(`[MusicPlayer] ⚠️ Failed to resolve ${track.title} on all nodes. Skipping...`);
                 queue.isPlaying = false;
-                playbackMutex.delete(guildId);
+                queue.state.transition('idle');
+                release();
                 return this.processQueue(guildId, _skipCount + 1);
             }
 
@@ -595,10 +680,11 @@ export class MusicPlayer {
             console.error(`[MusicPlayer] ❌ Critical Playback Error for guild ${guildId}:`, err);
             queue.textChannel.send(`❌ **Playback Failed**: ${err.message || 'Unknown error'}. Skipping...`);
             queue.isPlaying = false;
-            playbackMutex.delete(guildId);
+            queue.state.transition('idle');
+            release();
             this.processQueue(guildId, _skipCount + 1).catch(() => { });
         } finally {
-            playbackMutex.delete(guildId);
+            release();
         }
     }
 
@@ -613,13 +699,19 @@ export class MusicPlayer {
 
         queue.player.on('start', async () => {
             console.log(`[Lavalink] Playback started in guild ${guildId}`);
+            queue.state.transition('playing');
             queue.isPlaying = true;
             queue.isPaused = false;
             queue.lastUpdate = Date.now();
             queue.lastStart = Date.now();
             queue.lastHeartbeat = Date.now();
-            queue.isRecovering = false;
             
+            const nodeName = queue.player?.node.name;
+            if (nodeName) {
+                const { recordSuccess } = await import('./NodeCircuitBreaker');
+                recordSuccess(nodeName);
+            }
+
             VoteSkipCommand.resetVotes(guildId);
             this.startProgressUpdate(guildId);
             MusicUIController.updateNowPlayingMessage(guildId).catch(() => {});
@@ -630,8 +722,13 @@ export class MusicPlayer {
 
         queue.player.on('update', (data) => {
             queue.lastUpdate = Date.now();
-            if (queue.isPlaying && !queue.isPaused) {
+            if (queue.state.is('playing')) {
                 queue.lastHeartbeat = Date.now();
+            }
+
+            if (data.state?.position !== undefined) {
+                queue.lastKnownPosition = data.state.position;
+                queue.lastPositionTimestamp = Date.now();
             }
 
             const position = data.state?.position ?? 0;
@@ -646,14 +743,19 @@ export class MusicPlayer {
             }
         });
 
-        queue.player.on('stuck', () => {
+        queue.player.on('stuck', async () => {
             console.warn(`[Lavalink] Track stuck in guild ${guildId}, skipping...`);
+            const nodeName = queue.player?.node.name;
+            if (nodeName) {
+                const { recordFailure } = await import('./NodeCircuitBreaker');
+                recordFailure(nodeName);
+            }
             if (queue.player) queue.player.stopTrack().catch(() => {});
         });
 
         queue.player.on('end', (data) => {
             console.log(`[Lavalink] Track ended in guild ${guildId}. Reason: ${data.reason}`);
-            if (queue.isRecovering) {
+            if (queue.state.is('recovering')) {
                 console.log(`[MusicPlayer] 🔄 End event ignored — player is recovering.`);
                 return;
             }
@@ -673,14 +775,6 @@ export class MusicPlayer {
                 failedTrack.url = ''; 
                 queue.tracks.unshift(failedTrack);
                 
-                // Try switching node if possible
-                const currentNodeName = queue.player?.node.name;
-                const otherNode = Array.from(shoukaku.nodes.values()).find(n => n.state === 1 && n.name !== currentNodeName);
-                if (otherNode && queue.player) {
-                    console.log(`[MusicPlayer] 🔀 Switching player from ${currentNodeName} to ${otherNode.name} to avoid block...`);
-                    queue.player.move(otherNode.name).catch(() => {});
-                }
-                
                 if (endTimeout) clearTimeout(endTimeout);
                 this.processQueue(guildId, 1).catch(() => {});
                 return;
@@ -698,6 +792,7 @@ export class MusicPlayer {
             }
             
             queue.isPlaying = false;
+            queue.state.transition('idle');
             this.stopProgressUpdate(guildId);
             
             VoiceStatusService.clearStatus(client, queue.voiceChannelId);
@@ -711,11 +806,17 @@ export class MusicPlayer {
             }, 250);
         });
 
-        queue.player.on('exception', (data) => {
+        queue.player.on('exception', async (data) => {
             console.error(`[Lavalink] Playback exception in guild ${guildId}:`, data.exception);
             exceptionPending = true;
             queue.isPlaying = false;
-            playbackMutex.delete(guildId);
+            queue.state.transition('idle');
+
+            const nodeName = queue.player?.node.name;
+            if (nodeName) {
+                const { recordFailure } = await import('./NodeCircuitBreaker');
+                recordFailure(nodeName);
+            }
             
             if (endTimeout) {
                 clearTimeout(endTimeout);
@@ -730,14 +831,6 @@ export class MusicPlayer {
                 failedTrack._fallbackAttempts = attempts + 1;
                 failedTrack.url = ''; // Clear URL to force search
                 queue.tracks.unshift(failedTrack);
-                
-                // Switch node to another healthy node to evade IP blocks
-                const currentNodeName = queue.player?.node.name;
-                const otherNode = Array.from(shoukaku.nodes.values()).find(n => n.state === 1 && n.name !== currentNodeName);
-                if (otherNode && queue.player) {
-                    console.log(`[MusicPlayer] 🔀 Switching player from ${currentNodeName} to ${otherNode.name} to avoid block...`);
-                    queue.player.move(otherNode.name).catch(() => {});
-                }
             }
             
             setTimeout(() => {
@@ -756,7 +849,7 @@ export class MusicPlayer {
 
         const interval = setInterval(async () => {
             const queue = QueueManager.getQueue(guildId);
-            if (!queue || !queue.isPlaying || queue.isPaused || queue.isRecovering) return;
+            if (!queue || !queue.state.is('playing')) return;
 
             const now = Date.now();
             const lastHb = queue.lastHeartbeat || 0;
@@ -786,15 +879,12 @@ export class MusicPlayer {
      */
     static async recoverPlayback(guildId: string) {
         let queue = QueueManager.getQueue(guildId);
-        if (!queue || !queue.currentTrack || queue.isRecovering) return;
+        if (!queue || !queue.currentTrack || queue.state.is('recovering')) return;
 
-        queue.isRecovering = true;
-        playbackMutex.delete(guildId);
+        queue.state.transition('recovering');
 
         // Snapshot position + track NOW before any async gap
-        let elapsedMs = queue.player?.position ?? 0;
-        if (queue.lastUpdate) elapsedMs += (Date.now() - queue.lastUpdate);
-        const seekToMs = Math.max(0, elapsedMs - 500);
+        const seekToMs = Math.max(0, this.getPosition(queue) - 500);
         const track = { ...queue.currentTrack }; // deep-copy so we keep it if queue is deleted
 
         console.log(`[Watchdog] 🔄 Recovering "${track.title}" at ${Math.round(seekToMs / 1000)}s for guild ${guildId}`);
@@ -845,7 +935,6 @@ export class MusicPlayer {
 
             console.log(`[Watchdog] ✅ Re-joined on node: ${player.node.name}`);
             queue.player = player;
-            queue.isPlaying = false;
             queue.lastHeartbeat = Date.now();
             this.setupPlayerEvents(guildId);
 
@@ -881,7 +970,7 @@ export class MusicPlayer {
 
             if (!lavalinkTrack?.encoded) {
                 console.error(`[Watchdog] ❌ Could not re-resolve track. Skipping.`);
-                queue.isRecovering = false;
+                queue.state.transition('idle');
                 queue.currentTrack = null;
                 queue.isPlaying = false;
                 this.processQueue(guildId).catch(() => {});
@@ -893,7 +982,7 @@ export class MusicPlayer {
                 await queue.player.playTrack({ track: { encoded: lavalinkTrack.encoded } });
             } catch (e: any) {
                 console.warn(`[Watchdog] playTrack failed (player gone?): ${e.message}`);
-                queue.isRecovering = false;
+                queue.state.transition('idle');
                 return;
             }
 
@@ -914,7 +1003,7 @@ export class MusicPlayer {
 
             if (!queue) return;
             queue.isPlaying = true;
-            queue.isRecovering = false;
+            queue.state.transition('playing');
             queue.lastHeartbeat = Date.now();
 
             const mins = Math.floor(seekToMs / 60000);
@@ -927,7 +1016,7 @@ export class MusicPlayer {
             console.error(`[Watchdog] ❌ Recovery failed for guild ${guildId}:`, err.message);
             const q = QueueManager.getQueue(guildId);
             if (q) {
-                q.isRecovering = false;
+                q.state.transition('idle');
                 q.isPlaying = false;
                 q.currentTrack = null;
                 this.processQueue(guildId).catch(() => {});
