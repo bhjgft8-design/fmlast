@@ -13,7 +13,7 @@ export class InputParser {
      * Handles Spotify Links, YouTube links, empty queries (Last.fm fallback), and raw text search.
      */
     static async parse(query: string, lastfmUsername?: string | null, lastfmSessionKey?: string | null): Promise<ParsedInputResult> {
-        let tracks: { name: string; artist: string; url?: string }[] = [];
+        let tracks: { name: string; artist: string; url?: string; id?: string }[] = [];
         let collectionName = '';
 
         const spotifyTrackRegex = /(?:https?:\/\/)?open\.spotify\.com\/track\/([a-zA-Z0-9]+)(?:\?.*)?/;
@@ -28,12 +28,31 @@ export class InputParser {
 
         if (trackMatch) {
             const meta = await Spotify.getTrackMetadataById(trackMatch[1]);
-            if (meta) tracks.push(meta);
+            if (meta) {
+                tracks.push({
+                    name: meta.name,
+                    artist: meta.artist,
+                    id: trackMatch[1],
+                    url: `https://open.spotify.com/track/${trackMatch[1]}`
+                });
+            }
         } else if (albumMatch) {
-            tracks = await Spotify.getAlbumTracks(albumMatch[1]);
+            const albumTracks = await Spotify.getAlbumTracks(albumMatch[1]);
+            tracks = albumTracks.map(t => ({
+                name: t.name,
+                artist: t.artist,
+                id: t.id,
+                url: t.id ? `https://open.spotify.com/track/${t.id}` : undefined
+            }));
             collectionName = 'Album';
         } else if (playlistMatch) {
-            tracks = await Spotify.getPlaylistTracks(playlistMatch[1]);
+            const playlistTracks = await Spotify.getPlaylistTracks(playlistMatch[1]);
+            tracks = playlistTracks.map(t => ({
+                name: t.name,
+                artist: t.artist,
+                id: t.id,
+                url: t.id ? `https://open.spotify.com/track/${t.id}` : undefined
+            }));
             collectionName = 'Playlist';
         } else if (ytPlaylistMatch) {
             const playlist = await Youtube.getPlaylistInfo(query);

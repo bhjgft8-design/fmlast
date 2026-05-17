@@ -59,18 +59,6 @@ export const LAVALINK_NODES = [
         auth: 'youshallnotpass',
         secure: false
     },
-    {
-        name: 'Nyxbot SG1 Node',
-        url: 'sg1-nodelink.nyxbot.app:3000',
-        auth: 'nyxbot.app/support',
-        secure: false
-    },
-    {
-        name: 'Nyxbot SG2 Node',
-        url: 'sg2-nodelink.nyxbot.app:3000',
-        auth: 'nyxbot.app/support',
-        secure: false
-    },
 
     {
         name: 'DevamOP Node',

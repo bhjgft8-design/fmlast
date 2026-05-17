@@ -153,6 +153,10 @@ client.on('voiceStateUpdate', async (oldState, newState) => {
 
             // 1. Kicked from channel
             if (oldState.channelId && !newState.channelId) {
+                if (queue.state.is('recovering')) {
+                    console.log(`[VoiceState] Bot disconnected from voice channel in guild ${guildId} due to recovery playback — ignoring.`);
+                    return;
+                }
                 console.log(`[VoiceState] Bot was kicked from voice channel in guild ${guildId}. Cleaning up.`);
                 MusicPlayer.stop(guildId);
             }
