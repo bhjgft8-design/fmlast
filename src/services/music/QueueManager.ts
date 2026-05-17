@@ -30,6 +30,8 @@ export interface GuildQueue {
     hasLyrics?: boolean;
     autoplay?: boolean;
     lastUpdate?: number;
+    lastHeartbeat?: number;   // Timestamp of last player audio update (for watchdog)
+    isRecovering?: boolean;   // Lock to prevent concurrent recovery attempts
 }
 
 const queues = new Map<string, GuildQueue>();
@@ -37,6 +39,10 @@ const queues = new Map<string, GuildQueue>();
 export class QueueManager {
     static getQueue(guildId: string): GuildQueue | undefined {
         return queues.get(guildId);
+    }
+
+    static getAllQueues(): Map<string, GuildQueue> {
+        return queues;
     }
 
     static createQueue(
@@ -69,10 +75,8 @@ export class QueueManager {
         if (queue.inactivityTimer) clearTimeout(queue.inactivityTimer);
         if (queue.progressInterval) clearInterval(queue.progressInterval);
         
-        queue.player?.stopTrack();
-        try {
-            shoukaku.leaveVoiceChannel(guildId);
-        } catch {}
+        queue.player?.stopTrack().catch(() => {});
+        shoukaku.leaveVoiceChannel(guildId).catch(() => {});
 
         queues.delete(guildId);
     }

@@ -38,13 +38,62 @@ export class MetadataService {
                 .trim();
         };
 
+        // Helper to aggressively clean query for Spotify search raw
+        const cleanForSearch = (title: string): string => {
+            let clean = title;
+            // Remove all parentheses/brackets and their content
+            clean = clean.replace(/\(.*?\)/g, '').replace(/\[.*?\]/g, '');
+            // Remove common English music suffixes
+            clean = clean.replace(/\b(official|video|audio|lyric|lyrics|hd|4k|feat|ft|with|prod|music|clip)\b/gi, '');
+            // Remove common Arabic music suffixes
+            clean = clean.replace(/\b(مهرجان|فيديو|كليب|حصريا|حصري|الاصلي|الاصلية|اغنية|أغنية|توزيع|غناء|بصوت|عزف|اورج)\b/gi, '');
+            // Remove years (like 2020-2029)
+            clean = clean.replace(/\b20\d{2}\b/g, '');
+            // Clean up extra whitespace and characters
+            clean = clean.replace(/[-_–—|•]/g, ' ')
+                         .replace(/\s+/g, ' ')
+                         .trim();
+            return clean;
+        };
+
         if (!finalArtist || !finalTrack) {
             try {
                 const { Spotify } = await import('../api/Spotify');
-                const spotifyMatch = await Spotify.searchRaw(track.title);
+                const cleanQuery = cleanForSearch(track.title);
+                console.log(`[MetadataService] 🔍 Searching Spotify for clean query: "${cleanQuery}" (Original: "${track.title}")`);
+                
+                const spotifyMatch = await Spotify.searchRaw(cleanQuery);
                 if (spotifyMatch && spotifyMatch.name && spotifyMatch.artist) {
-                    finalArtist = spotifyMatch.artist;
-                    finalTrack = spotifyMatch.name;
+                    // Let's validate the match is actually relevant to the YouTube title
+                    const cleanString = (str: string) => {
+                        return (str || '')
+                            .toLowerCase()
+                            .replace(/[^a-z0-9\u0600-\u06FF\s]/g, '') // Keep alphanumeric, Arabic, and spaces
+                            .replace(/\s+/g, ' ')
+                            .trim();
+                    };
+
+                    const cleanTitleNormalized = cleanString(track.title);
+                    const cleanArtistNormalized = cleanString(spotifyMatch.artist);
+                    const cleanNameNormalized = cleanString(spotifyMatch.name);
+
+                    const artistWords = cleanArtistNormalized.split(' ').filter(w => w.length > 1);
+                    const nameWords = cleanNameNormalized.split(' ').filter(w => w.length > 1);
+
+                    const artistOverlap = artistWords.filter(w => cleanTitleNormalized.includes(w)).length;
+                    const nameOverlap = nameWords.filter(w => cleanTitleNormalized.includes(w)).length;
+
+                    // We require at least 1 word from the artist and 1 word from the track name to overlap with the YouTube title
+                    const hasArtistMatch = artistWords.length === 0 || artistOverlap > 0;
+                    const hasNameMatch = nameWords.length === 0 || nameOverlap > 0;
+
+                    if (hasArtistMatch && hasNameMatch && (artistOverlap > 0 || nameOverlap > 0)) {
+                        finalArtist = spotifyMatch.artist;
+                        finalTrack = spotifyMatch.name;
+                        console.log(`[MetadataService] ✅ Accepted Spotify match: "${spotifyMatch.artist} - ${spotifyMatch.name}"`);
+                    } else {
+                        console.log(`[MetadataService] 🚫 Rejected irrelevant Spotify match: "${spotifyMatch.artist} - ${spotifyMatch.name}" (Artist overlap: ${artistOverlap}/${artistWords.length}, Track overlap: ${nameOverlap}/${nameWords.length})`);
+                    }
                 }
             } catch (err) {
                 // Ignore and fall back
@@ -54,7 +103,6 @@ export class MetadataService {
         if (!finalArtist || !finalTrack) {
             const separators = [' - ', ' – ', ' — ', ' | '];
             let found = false;
-            const channelClean = track.channelTitle ? track.channelTitle.toLowerCase().replace(' - topic', '').replace(/\s+/g, '') : '';
             
             for (const sep of separators) {
                 if (track.title.includes(sep)) {
@@ -62,24 +110,38 @@ export class MetadataService {
                     const part0 = parts[0].trim();
                     const part1 = parts.slice(1).join(sep).trim();
                     
-                    const p0Clean = part0.toLowerCase().replace(/\s+/g, '');
-                    const p1Clean = part1.toLowerCase().replace(/\s+/g, '');
+                    const cleanPart = (s: string) => s.toLowerCase().replace(/\s+/g, '');
+                    const isPartClean = (s: string) => {
+                        const cs = cleanPart(s);
+                        return cs.length > 2 && !cs.includes('توزيع') && !cs.includes('prod') && !cs.includes('remix');
+                    };
 
-                    // Check if part1 matches the channel title, meaning format is "Track - Artist"
-                    if (channelClean && (p1Clean.includes(channelClean) || channelClean.includes(p1Clean))) {
-                        finalArtist = part1;
-                        finalTrack = part0;
-                    } else if (channelClean && (p0Clean.includes(channelClean) || channelClean.includes(p0Clean))) {
-                        // "Artist - Track"
-                        finalArtist = part0;
-                        finalTrack = part1;
-                    } else {
-                        // Default to "Artist - Track" as fallback
-                        finalArtist = part0;
-                        finalTrack = part1;
+                    // Only perform separation split if it looks like a clean Artist - Track split
+                    if (isPartClean(part0) && isPartClean(part1)) {
+                        const channelClean = track.channelTitle ? track.channelTitle.toLowerCase().replace(' - topic', '').replace(/\s+/g, '') : '';
+                        const channelParts = track.channelTitle 
+                            ? track.channelTitle.split(/[-–—|]/).map(p => p.toLowerCase().replace(/\s+/g, '')).filter(p => p.length > 2)
+                            : [];
+                        
+                        const hasChannelMatch = (pClean: string) => {
+                            if (!channelClean) return false;
+                            if (pClean.includes(channelClean) || channelClean.includes(pClean)) return true;
+                            return channelParts.some(cp => pClean.includes(cp) || cp.includes(pClean));
+                        };
+
+                        const p0Clean = cleanPart(part0);
+                        const p1Clean = cleanPart(part1);
+
+                        if (hasChannelMatch(p1Clean)) {
+                            finalArtist = part1;
+                            finalTrack = part0;
+                        } else {
+                            finalArtist = part0;
+                            finalTrack = part1;
+                        }
+                        found = true;
+                        break;
                     }
-                    found = true;
-                    break;
                 }
             }
             

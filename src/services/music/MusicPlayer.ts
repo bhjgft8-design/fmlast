@@ -23,6 +23,13 @@ const ARTIST_OVERRIDES: Record<string, { cluster: string, related?: string[] }> 
 };
 
 export class MusicPlayer {
+    private static resolveWithTimeout(node: any, query: string, timeoutMs = 2500): Promise<any> {
+        return Promise.race([
+            node.rest.resolve(query),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), timeoutMs))
+        ]);
+    }
+
     static async join(guildId: string, voiceChannelId: string, textChannel: TextChannel): Promise<GuildQueue> {
         let queue = QueueManager.getQueue(guildId);
 
@@ -78,7 +85,7 @@ export class MusicPlayer {
         const queue = QueueManager.getQueue(guildId);
         if (queue && queue.player) {
             this.stopProgressUpdate(guildId);
-            queue.player.stopTrack();
+            queue.player.stopTrack().catch(() => {});
             return true;
         }
         return false;
@@ -90,6 +97,7 @@ export class MusicPlayer {
             VoiceStatusService.clearStatus(client, queue.voiceChannelId);
             VoiceStatusService.updatePresence(client, null);
         }
+        this.stopWatchdog(guildId);
         QueueManager.deleteQueue(guildId);
         playbackMutex.delete(guildId);
         return true;
@@ -403,42 +411,71 @@ export class MusicPlayer {
                 .filter(node => node.state === 1)
                 .sort((a, b) => (a.penalties || 0) - (b.penalties || 0));
             let lavalinkTrack = null;
+            const attempts = track._fallbackAttempts || 0;
 
-            for (const node of nodes) {
-                try {
-                    let res;
-                    const searchStr = track.artistName && track.trackTitle ? `${track.artistName} ${track.trackTitle}` : track.title;
-                    const attempts = track._fallbackAttempts || 0;
-                    
-                    if (attempts > 0) {
-                        const prefix1 = attempts % 2 === 1 ? 'spsearch:' : 'scsearch:';
-                        const prefix2 = attempts % 2 === 1 ? 'scsearch:' : 'spsearch:';
-                        console.log(`[MusicPlayer] 🔍 Retrying on node ${node.name} with ${prefix1}/${prefix2}: ${searchStr}`);
-                        res = await node.rest.resolve(`${prefix1}${searchStr}`);
-                        if (!res || !res.data || res.loadType === 'empty' || res.loadType === 'error') {
-                            res = await node.rest.resolve(`${prefix2}${searchStr}`);
+            // 1. Prioritize resolving the exact URL across all healthy nodes first!
+            if (track.url && attempts === 0) {
+                for (const node of nodes) {
+                    try {
+                        console.log(`[MusicPlayer] 🔍 Resolving exact URL on node ${node.name}: ${track.url}`);
+                        const res = await this.resolveWithTimeout(node, track.url, 2500);
+                        if (res && res.data && res.loadType !== 'empty' && res.loadType !== 'error') {
+                            lavalinkTrack = Array.isArray(res.data) ? res.data[0] : res.data;
+                            
+                            // If this node is not the current player node, dynamically migrate!
+                            if (queue.player && queue.player.node.name !== node.name) {
+                                console.log(`[MusicPlayer] 🔀 Migrating player from "${queue.player.node.name}" to "${node.name}" to evade regional block...`);
+                                await queue.player.move(node.name).catch(() => {});
+                            }
+                            break;
+                        } else {
+                            console.warn(`[MusicPlayer] ⚠️ Node ${node.name} cannot access this URL (LoadType: ${res?.loadType})`);
                         }
-                    } else {
-                        console.log(`[MusicPlayer] 🔍 Resolving on node ${node.name}: ${track.url || track.title}`);
-                        res = await node.rest.resolve(track.url);
-                        if (!res || !res.data || res.loadType === 'empty' || res.loadType === 'error') {
-                            res = await node.rest.resolve(`spsearch:${searchStr}`);
-                        }
-                        if (!res || !res.data || res.loadType === 'empty' || res.loadType === 'error') {
-                            res = await node.rest.resolve(`ytmsearch:${searchStr}`);
-                        }
-                        if (!res || !res.data || res.loadType === 'empty' || res.loadType === 'error') {
-                            res = await node.rest.resolve(`ytsearch:${track.title}`);
-                        }
+                    } catch (e: any) {
+                        console.warn(`[MusicPlayer] ⚠️ Node ${node.name} failed URL resolution: ${e.message}`);
                     }
+                }
+            }
 
-                    if (res && res.data && res.loadType !== 'empty' && res.loadType !== 'error') {
-                        lavalinkTrack = Array.isArray(res.data) ? res.data[0] : res.data;
-                        break;
+            // 2. Fall back to search querying across all healthy nodes if exact URL failed or wasn't provided
+            if (!lavalinkTrack) {
+                const searchStr = track.artistName && track.trackTitle ? `${track.artistName} ${track.trackTitle}` : track.title;
+                
+                for (const node of nodes) {
+                    try {
+                        let res;
+                        if (attempts > 0) {
+                            const prefix1 = attempts % 2 === 1 ? 'spsearch:' : 'scsearch:';
+                            const prefix2 = attempts % 2 === 1 ? 'scsearch:' : 'spsearch:';
+                            console.log(`[MusicPlayer] 🔍 Resolving search fallback on node ${node.name} with ${prefix1}/${prefix2}: ${searchStr}`);
+                            res = await this.resolveWithTimeout(node, `${prefix1}${searchStr}`, 2500);
+                            if (!res || !res.data || res.loadType === 'empty' || res.loadType === 'error') {
+                                res = await this.resolveWithTimeout(node, `${prefix2}${searchStr}`, 2500);
+                            }
+                        } else {
+                            console.log(`[MusicPlayer] 🔍 Resolving search fallback on node ${node.name} with spsearch: ${searchStr}`);
+                            res = await this.resolveWithTimeout(node, `spsearch:${searchStr}`, 2500);
+                            if (!res || !res.data || res.loadType === 'empty' || res.loadType === 'error') {
+                                res = await this.resolveWithTimeout(node, `ytmsearch:${searchStr}`, 2500);
+                            }
+                            if (!res || !res.data || res.loadType === 'empty' || res.loadType === 'error') {
+                                res = await this.resolveWithTimeout(node, `ytsearch:${track.title}`, 2500);
+                            }
+                        }
+
+                        if (res && res.data && res.loadType !== 'empty' && res.loadType !== 'error') {
+                            lavalinkTrack = Array.isArray(res.data) ? res.data[0] : res.data;
+                            
+                            // Migrate player to the successful search node
+                            if (queue.player && queue.player.node.name !== node.name) {
+                                console.log(`[MusicPlayer] 🔀 Migrating player from "${queue.player.node.name}" to "${node.name}" for search fallback...`);
+                                await queue.player.move(node.name).catch(() => {});
+                            }
+                            break;
+                        }
+                    } catch (e: any) {
+                        console.warn(`[MusicPlayer] ⚠️ Node ${node.name} search resolution failed: ${e.message}`);
                     }
-                } catch (e: any) { 
-                    console.warn(`[MusicPlayer] ⚠️ Node ${node.name} resolution failed: ${e.message}`);
-                    continue; 
                 }
             }
 
@@ -495,6 +532,8 @@ export class MusicPlayer {
             queue.isPaused = false;
             queue.lastUpdate = Date.now();
             queue.lastStart = Date.now();
+            queue.lastHeartbeat = Date.now();
+            queue.isRecovering = false;
             
             VoteSkipCommand.resetVotes(guildId);
             this.startProgressUpdate(guildId);
@@ -503,15 +542,22 @@ export class MusicPlayer {
 
         queue.player.on('update', () => {
             queue.lastUpdate = Date.now();
+            if (queue.isPlaying && !queue.isPaused) {
+                queue.lastHeartbeat = Date.now();
+            }
         });
 
         queue.player.on('stuck', () => {
             console.warn(`[Lavalink] Track stuck in guild ${guildId}, skipping...`);
-            if (queue.player) queue.player.stopTrack();
+            if (queue.player) queue.player.stopTrack().catch(() => {});
         });
 
         queue.player.on('end', (data) => {
             console.log(`[Lavalink] Track ended in guild ${guildId}. Reason: ${data.reason}`);
+            if (queue.isRecovering) {
+                console.log(`[MusicPlayer] 🔄 End event ignored — player is recovering.`);
+                return;
+            }
             if (data.reason === 'replaced') return;
             if (exceptionPending) {
                 console.log(`[MusicPlayer] ⏭ End event suppressed — exception is handling retry.`);
@@ -589,6 +635,220 @@ export class MusicPlayer {
                 this.processQueue(guildId, 1).catch(() => {});
             }, 250);
         });
+
+        this.startWatchdog(guildId);
+    }
+
+    private static watchdogIntervals = new Map<string, NodeJS.Timeout>();
+
+    private static startWatchdog(guildId: string) {
+        this.stopWatchdog(guildId);
+
+        const interval = setInterval(async () => {
+            const queue = QueueManager.getQueue(guildId);
+            if (!queue || !queue.isPlaying || queue.isPaused || queue.isRecovering) return;
+
+            const now = Date.now();
+            const lastHb = queue.lastHeartbeat || 0;
+            const silenceDuration = now - lastHb;
+
+            // If playing but no heartbeat for >30 seconds, playback is frozen
+            if (lastHb > 0 && silenceDuration > 30000) {
+                console.warn(`[Watchdog] ⚠️ Guild ${guildId}: Frozen playback detected (${Math.round(silenceDuration / 1000)}s silence). Recovering...`);
+                await this.recoverPlayback(guildId);
+            }
+        }, 10000);
+
+        this.watchdogIntervals.set(guildId, interval);
+    }
+
+    private static stopWatchdog(guildId: string) {
+        const interval = this.watchdogIntervals.get(guildId);
+        if (interval) {
+            clearInterval(interval);
+            this.watchdogIntervals.delete(guildId);
+        }
+    }
+
+    /**
+     * Recovers frozen/dead playback by re-joining voice on the best available node
+     * and seeking back to the exact timestamp the player stopped at.
+     */
+    static async recoverPlayback(guildId: string) {
+        let queue = QueueManager.getQueue(guildId);
+        if (!queue || !queue.currentTrack || queue.isRecovering) return;
+
+        queue.isRecovering = true;
+        playbackMutex.delete(guildId);
+
+        // Snapshot position + track NOW before any async gap
+        let elapsedMs = queue.player?.position ?? 0;
+        if (queue.lastUpdate) elapsedMs += (Date.now() - queue.lastUpdate);
+        const seekToMs = Math.max(0, elapsedMs - 500);
+        const track = { ...queue.currentTrack }; // deep-copy so we keep it if queue is deleted
+
+        console.log(`[Watchdog] 🔄 Recovering "${track.title}" at ${Math.round(seekToMs / 1000)}s for guild ${guildId}`);
+
+        try {
+            // Gracefully stop + leave before rejoining
+            try {
+                queue.player?.stopTrack().catch(() => {});
+                await new Promise(r => setTimeout(r, 300));
+            } catch { /* ignore */ }
+
+            // Re-check: user may have manually stopped during the 300ms wait
+            queue = QueueManager.getQueue(guildId)!;
+            if (!queue) {
+                console.log(`[Watchdog] Guild ${guildId} queue gone during recovery — aborting.`);
+                return;
+            }
+
+            try {
+                await shoukaku.leaveVoiceChannel(guildId);
+            } catch { /* ignore */ }
+            await new Promise(r => setTimeout(r, 600));
+
+            // Re-check again after another await
+            queue = QueueManager.getQueue(guildId)!;
+            if (!queue) {
+                console.log(`[Watchdog] Guild ${guildId} queue gone during recovery — aborting.`);
+                return;
+            }
+
+            const guild = client.guilds.cache.get(guildId);
+            const shardId = guild?.shardId ?? 0;
+
+            const player = await shoukaku.joinVoiceChannel({
+                guildId,
+                channelId: queue.voiceChannelId,
+                shardId,
+                deaf: true
+            });
+
+            // Final check after the join await
+            queue = QueueManager.getQueue(guildId)!;
+            if (!queue) {
+                console.log(`[Watchdog] Guild ${guildId} queue gone after re-join — aborting.`);
+                shoukaku.leaveVoiceChannel(guildId).catch(() => {});
+                return;
+            }
+
+            console.log(`[Watchdog] ✅ Re-joined on node: ${player.node.name}`);
+            queue.player = player;
+            queue.isPlaying = false;
+            queue.lastHeartbeat = Date.now();
+            this.setupPlayerEvents(guildId);
+
+            // Re-resolve the track on the best available node using exact-URL prioritizing loop
+            const nodes = Array.from(shoukaku.nodes.values())
+                .filter(n => n.state === 1)
+                .sort((a, b) => (a.penalties || 0) - (b.penalties || 0));
+
+            let lavalinkTrack: any = null;
+
+            // 1. Try resolving exact URL across all healthy nodes first!
+            if (track.url) {
+                for (const node of nodes) {
+                    try {
+                        console.log(`[Watchdog] 🔍 Resolving exact URL during recovery on node ${node.name}: ${track.url}`);
+                        const res = await this.resolveWithTimeout(node, track.url, 2500);
+                        if (res && res.data && res.loadType !== 'empty' && res.loadType !== 'error') {
+                            lavalinkTrack = Array.isArray(res.data) ? res.data[0] : res.data;
+                            if (queue.player && queue.player.node.name !== node.name) {
+                                console.log(`[Watchdog] 🔀 Migrating player to "${node.name}" to evade regional block...`);
+                                await queue.player.move(node.name).catch(() => {});
+                            }
+                            break;
+                        }
+                    } catch (e: any) {
+                        console.warn(`[Watchdog] ⚠️ Node ${node.name} failed URL recovery: ${e.message}`);
+                    }
+                }
+            }
+
+            // 2. Fall back to search querying across all nodes if exact URL failed
+            if (!lavalinkTrack) {
+                const searchStr = track.artistName && track.trackTitle ? `${track.artistName} ${track.trackTitle}` : track.title;
+                for (const node of nodes) {
+                    try {
+                        let res;
+                        console.log(`[Watchdog] 🔍 Resolving search fallback during recovery on node ${node.name} with spsearch: ${searchStr}`);
+                        res = await this.resolveWithTimeout(node, `spsearch:${searchStr}`, 2500);
+                        if (!res || !res.data || res.loadType === 'empty' || res.loadType === 'error') {
+                            res = await this.resolveWithTimeout(node, `ytsearch:${searchStr}`, 2500);
+                        }
+                        if (res && res.data && res.loadType !== 'empty' && res.loadType !== 'error') {
+                            lavalinkTrack = Array.isArray(res.data) ? res.data[0] : res.data;
+                            if (queue.player && queue.player.node.name !== node.name) {
+                                console.log(`[Watchdog] 🔀 Migrating player to "${node.name}" for search fallback recovery...`);
+                                await queue.player.move(node.name).catch(() => {});
+                            }
+                            break;
+                        }
+                    } catch (e: any) {
+                        console.warn(`[Watchdog] ⚠️ Node ${node.name} search fallback recovery failed: ${e.message}`);
+                    }
+                }
+            }
+
+            // Re-check queue is still alive after all those node awaits
+            queue = QueueManager.getQueue(guildId)!;
+            if (!queue) return;
+
+            if (!lavalinkTrack?.encoded) {
+                console.error(`[Watchdog] ❌ Could not re-resolve track. Skipping.`);
+                queue.isRecovering = false;
+                queue.currentTrack = null;
+                queue.isPlaying = false;
+                this.processQueue(guildId).catch(() => {});
+                return;
+            }
+
+            // Play — isolated try/catch so a stale player doesn't crash the process
+            try {
+                await queue.player.playTrack({ track: { encoded: lavalinkTrack.encoded } });
+            } catch (e: any) {
+                console.warn(`[Watchdog] playTrack failed (player gone?): ${e.message}`);
+                queue.isRecovering = false;
+                return;
+            }
+
+            // Seek — isolated so failure here doesn't kill anything
+            if (seekToMs > 2000) {
+                try {
+                    await new Promise(r => setTimeout(r, 500));
+                    // One last queue check before seek
+                    queue = QueueManager.getQueue(guildId)!;
+                    if (queue?.player) {
+                        await queue.player.seekTo(seekToMs);
+                        console.log(`[Watchdog] ⏩ Seeked to ${Math.round(seekToMs / 1000)}s`);
+                    }
+                } catch (e: any) {
+                    console.warn(`[Watchdog] seekTo failed (non-fatal): ${e.message}`);
+                }
+            }
+
+            if (!queue) return;
+            queue.isPlaying = true;
+            queue.isRecovering = false;
+            queue.lastHeartbeat = Date.now();
+
+            const mins = Math.floor(seekToMs / 60000);
+            const secs = String(Math.floor((seekToMs % 60000) / 1000)).padStart(2, '0');
+            queue.textChannel.send(
+                `🔄 **Playback recovered** — resuming **${track.artistName || ''} ${track.trackTitle || track.title}** from \`${mins}:${secs}\``
+            ).catch(() => {});
+
+        } catch (err: any) {
+            console.error(`[Watchdog] ❌ Recovery failed for guild ${guildId}:`, err.message);
+            const q = QueueManager.getQueue(guildId);
+            if (q) {
+                q.isRecovering = false;
+                q.isPlaying = false;
+                q.currentTrack = null;
+                this.processQueue(guildId).catch(() => {});
+            }
+        }
     }
 
     private static startProgressUpdate(guildId: string) {

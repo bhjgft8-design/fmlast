@@ -47,7 +47,20 @@ shoukaku.on('close', (name, code, reason) => {
     if (code !== 1000) console.warn(`[Lavalink] 🟡 Node ${name} closed (Code: ${code})`);
 });
 shoukaku.on('disconnect', (name, players) => {
-    // Silent disconnects are handled by shoukaku's moveOnDisconnect
+    // When a node drops, immediately try to recover any active guild playback on that node
+    if (players && players > 0) {
+        console.warn(`[Lavalink] 🔌 Node ${name} disconnected with ${players} active player(s). Triggering recovery...`);
+        setTimeout(async () => {
+            const { MusicPlayer } = await import('./services/music/MusicPlayer');
+            const { QueueManager } = await import('./services/music/QueueManager');
+            for (const [guildId, queue] of QueueManager.getAllQueues()) {
+                if (queue.isPlaying && queue.player?.node?.name === name) {
+                    console.log(`[Lavalink] 🔄 Recovering guild ${guildId} after node ${name} disconnect...`);
+                    MusicPlayer.recoverPlayback(guildId).catch(() => {});
+                }
+            }
+        }, 1500);
+    }
 });
 
 // Periodic check to revive nodes that completely died after retries exhausted
