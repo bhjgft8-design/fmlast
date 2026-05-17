@@ -39,6 +39,19 @@ export class MetadataService {
         };
 
         if (!finalArtist || !finalTrack) {
+            try {
+                const { Spotify } = await import('../api/Spotify');
+                const spotifyMatch = await Spotify.searchRaw(track.title);
+                if (spotifyMatch && spotifyMatch.name && spotifyMatch.artist) {
+                    finalArtist = spotifyMatch.artist;
+                    finalTrack = spotifyMatch.name;
+                }
+            } catch (err) {
+                // Ignore and fall back
+            }
+        }
+
+        if (!finalArtist || !finalTrack) {
             const separators = [' - ', ' – ', ' — ', ' | '];
             let found = false;
             const channelClean = track.channelTitle ? track.channelTitle.toLowerCase().replace(' - topic', '').replace(/\s+/g, '') : '';

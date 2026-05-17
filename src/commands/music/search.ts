@@ -115,8 +115,9 @@ export default class SearchCommand extends BaseCommand {
                 await MusicPlayer.join(guildId, member.voice.channel.id, interactionOrMessage.channel as TextChannel);
                 const pos = await MusicPlayer.play(guildId, track);
 
+                const displayName = track.artistName && track.trackTitle ? `${track.artistName} - ${track.trackTitle}` : track.title;
                 const finalBuilder = new ComponentsV2()
-                    .addText(`✅ **${track.title}** added to queue! ${pos > 0 ? `(Position: ${pos})` : '(Starting playback...)'}`);
+                    .addText(`✅ **${displayName}** added to queue! ${pos > 0 ? `(Position: ${pos})` : '(Starting playback...)'}`);
                 
                 await i.editReply(finalBuilder.build());
             });
