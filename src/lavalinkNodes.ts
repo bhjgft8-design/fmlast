@@ -118,5 +118,41 @@ export const LAVALINK_NODES = [
         url: 'lavalink.triniumhost.com:4333',
         auth: 'free',
         secure: false
+    },
+    {
+        name: 'Jirayu SSL Node',
+        url: 'lavalink.jirayu.net:443',
+        auth: 'youshallnotpass',
+        secure: true
+    },
+    {
+        name: 'Muzykant v4',
+        url: 'lavalink_v4.muzykant.xyz:443',
+        auth: 'https://discord.gg/v6sdrD9kPh',
+        secure: true
+    },
+    {
+        name: 'Is-It-Pink Node 4',
+        url: 'lavalink-4.is-it.pink:443',
+        auth: 'https://disutils.com',
+        secure: true
+    },
+    {
+        name: 'Is-It-Pink Node 5',
+        url: 'lavalink-5.is-it.pink:443',
+        auth: 'https://disutils.com',
+        secure: true
+    },
+    {
+        name: 'Oreshi Node',
+        url: 'proxy.oreshi.com:2333',
+        auth: 'https://discord.gg/RPCfvBSUuM',
+        secure: false
+    },
+    {
+        name: 'AjieBlogs Non-SSL',
+        url: 'lava-v4.ajieblogs.eu.org:80',
+        auth: 'https://dsc.gg/ajidevserver',
+        secure: false
     }
 ];
