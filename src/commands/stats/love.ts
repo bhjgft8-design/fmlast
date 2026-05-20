@@ -8,7 +8,7 @@ import { SettingService } from '../../services/bot/SettingService';
 export default class LoveCommand extends BaseCommand {
     name = 'love';
     description = 'Love a track on Last.fm';
-    aliases = [];
+    aliases = ['l'];
 
     slashData = new SlashCommandBuilder()
         .setName('love')

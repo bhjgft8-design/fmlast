@@ -6,7 +6,7 @@ import { ComponentsV2 } from '../../utils/ComponentsV2';
 export default class LyricsCommand extends BaseCommand {
     name = 'lyrics';
     description = 'Get lyrics for the currently playing track';
-    aliases = ['ly', 'l'];
+    aliases = ['ly'];
 
     slashData = new SlashCommandBuilder()
         .setName('lyrics')

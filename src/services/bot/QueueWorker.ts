@@ -490,8 +490,8 @@ async function upsertAggregates(userId: string, artists: Map<string, any>, track
         const artistIdMap = new Map<string, string>();
         const missingFromL1: string[] = [];
         for (const name of artistNames) {
-            const cached = l1Cache.artists.get(name);
-            if (cached) artistIdMap.set(name, cached);
+            const cached = l1Cache.artists.get(name.toLowerCase());
+            if (cached) artistIdMap.set(name.toLowerCase(), cached);
             else missingFromL1.push(name);
         }
 
@@ -505,8 +505,8 @@ async function upsertAggregates(userId: string, artists: Map<string, any>, track
                 chunk.forEach((name, idx) => {
                     const val = cachedFromL2.get(cacheKeys[idx]);
                     if (val) {
-                        artistIdMap.set(name, val);
-                        l1Cache.artists.set(name, val);
+                        artistIdMap.set(name.toLowerCase(), val);
+                        l1Cache.artists.set(name.toLowerCase(), val);
                     } else {
                         missingFromCache.push(name);
                     }
@@ -515,18 +515,18 @@ async function upsertAggregates(userId: string, artists: Map<string, any>, track
                 if (missingFromCache.length > 0) {
                     const dbArtists = await prisma.artist.findMany({ where: { name: { in: missingFromCache } } });
                     dbArtists.forEach(a => {
-                        artistIdMap.set(a.name, a.id);
-                        l1Cache.artists.set(a.name, a.id);
+                        artistIdMap.set(a.name.toLowerCase(), a.id);
+                        l1Cache.artists.set(a.name.toLowerCase(), a.id);
                     });
                     
-                    const stillMissing = missingFromCache.filter(n => !artistIdMap.has(n));
+                    const stillMissing = missingFromCache.filter(n => !artistIdMap.has(n.toLowerCase()));
                     if (stillMissing.length > 0) {
                         await prisma.artist.createMany({ data: stillMissing.map(name => ({ name })), skipDuplicates: true });
                         const created = await prisma.artist.findMany({ where: { name: { in: stillMissing } } });
                         const msetEntries: any[] = [];
                         created.forEach(a => {
-                            artistIdMap.set(a.name, a.id);
-                            l1Cache.artists.set(a.name, a.id);
+                            artistIdMap.set(a.name.toLowerCase(), a.id);
+                            l1Cache.artists.set(a.name.toLowerCase(), a.id);
                             msetEntries.push({ key: `idres:artist:${a.name.toLowerCase()}`, value: a.id, ttl: 86400 });
                         });
                         if (msetEntries.length > 0) await CacheService.mset(msetEntries);
@@ -535,9 +535,21 @@ async function upsertAggregates(userId: string, artists: Map<string, any>, track
             }
         }
 
+        // Fallback: If any artist is still missing from the map, resolve it robustly using the single-row upsert
+        const stillMissingArtistsAfterAll = artistNames.filter(name => !artistIdMap.has(name.toLowerCase()));
+        if (stillMissingArtistsAfterAll.length > 0) {
+            for (const name of stillMissingArtistsAfterAll) {
+                const id = await IdResolutionService.getArtistId(name);
+                if (id) {
+                    artistIdMap.set(name.toLowerCase(), id);
+                    l1Cache.artists.set(name.toLowerCase(), id);
+                }
+            }
+        }
+
         const artistRows = Array.from(artists.values()).map(d => ({
             userId,
-            artistId: artistIdMap.get(d.name) || '',
+            artistId: artistIdMap.get(d.name.toLowerCase()) || '',
             artistName: d.name,
             playcount: d.count
         })).filter(r => r.artistId);
@@ -554,7 +566,7 @@ async function upsertAggregates(userId: string, artists: Map<string, any>, track
         const missingFromL1Tracks: any[] = [];
 
         for (const d of trackList) {
-            const artistId = artistIdMap.get(d.artistName);
+            const artistId = artistIdMap.get(d.artistName.toLowerCase());
             if (!artistId) continue;
             const l1Key = `${artistId}:${d.trackName.toLowerCase()}`;
             const cached = l1Cache.tracks.get(l1Key);
@@ -605,8 +617,23 @@ async function upsertAggregates(userId: string, artists: Map<string, any>, track
             }
         }
 
+        // Fallback: If any track is still missing, resolve it robustly one-by-one.
+        const stillMissingTracksAfterAll = missingFromL1Tracks.filter(t => !trackIdMap.has(`${t.artistId}:${t.name.toLowerCase()}`));
+        if (stillMissingTracksAfterAll.length > 0) {
+            for (const t of stillMissingTracksAfterAll) {
+                if (t.artistId && t.name) {
+                    const id = await IdResolutionService.getTrackId(t.artistId, t.name);
+                    if (id) {
+                        const key = `${t.artistId}:${t.name.toLowerCase()}`;
+                        trackIdMap.set(key, id);
+                        l1Cache.tracks.set(key, id);
+                    }
+                }
+            }
+        }
+
         const trackRows = Array.from(tracks.values()).map(d => {
-            const artistId = artistIdMap.get(d.artistName) || '';
+            const artistId = artistIdMap.get(d.artistName.toLowerCase()) || '';
             const trackId = trackIdMap.get(`${artistId}:${d.trackName.toLowerCase()}`) || '';
             return { userId, artistId, trackId, artistName: d.artistName, trackName: d.trackName, playcount: d.count };
         }).filter(r => r.artistId && r.trackId);
@@ -623,7 +650,7 @@ async function upsertAggregates(userId: string, artists: Map<string, any>, track
         const missingFromL1Albums: any[] = [];
 
         for (const d of albumList) {
-            const artistId = artistIdMap.get(d.artistName);
+            const artistId = artistIdMap.get(d.artistName.toLowerCase());
             if (!artistId) continue;
             const l1Key = `${artistId}:${d.albumName.toLowerCase()}`;
             const cached = l1Cache.albums.get(l1Key);
@@ -674,8 +701,23 @@ async function upsertAggregates(userId: string, artists: Map<string, any>, track
             }
         }
 
+        // Fallback: If any album is still missing, resolve it robustly one-by-one.
+        const stillMissingAlbumsAfterAll = missingFromL1Albums.filter(al => !albumIdMap.has(`${al.artistId}:${al.name.toLowerCase()}`));
+        if (stillMissingAlbumsAfterAll.length > 0) {
+            for (const al of stillMissingAlbumsAfterAll) {
+                if (al.artistId && al.name) {
+                    const id = await IdResolutionService.getAlbumId(al.artistId, al.name);
+                    if (id) {
+                        const key = `${al.artistId}:${al.name.toLowerCase()}`;
+                        albumIdMap.set(key, id);
+                        l1Cache.albums.set(key, id);
+                    }
+                }
+            }
+        }
+
         const albumRows = Array.from(albums.values()).map(d => {
-            const artistId = artistIdMap.get(d.artistName) || '';
+            const artistId = artistIdMap.get(d.artistName.toLowerCase()) || '';
             const albumId = albumIdMap.get(`${artistId}:${d.albumName.toLowerCase()}`) || '';
             return { userId, artistId, albumId, artistName: d.artistName, albumName: d.albumName, playcount: d.count };
         }).filter(r => r.artistId && r.albumId);
