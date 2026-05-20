@@ -47,9 +47,20 @@ export class Youtube {
         }
 
         const isArabic = /[\u0600-\u06FF]/.test(query);
-        const searchQuery = (isMusic && !isArabic) ? `${query} (Official Audio)` : query;
+        const hasSpecificVersion = /\b(remix|cover|live|slowed|reverb|acoustic|version|edit|mashup|mix|remake|instrumental|karaoke|sped\s+up|speed\s+up|official|audio|video|music)\b/i.test(query);
+        const searchQuery = (isMusic && !isArabic && !hasSpecificVersion) ? `${query} (Official Audio)` : query;
         const results = await this.searchByQuery(searchQuery);
         return results[0] ?? null;
+    }
+
+    private static parseISO8601Duration(durationStr: string): number {
+        const regex = /PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?/;
+        const matches = durationStr.match(regex);
+        if (!matches) return 0;
+        const hours = parseInt(matches[1] || '0', 10);
+        const minutes = parseInt(matches[2] || '0', 10);
+        const seconds = parseInt(matches[3] || '0', 10);
+        return hours * 3600 + minutes * 60 + seconds;
     }
 
     private static async searchViaGoogleApi(query: string): Promise<YoutubeResult[]> {
@@ -71,13 +82,45 @@ export class Youtube {
 
             if (!data.items || data.items.length === 0) return [];
 
-            return data.items.map((item: any) => ({
-                title: item.snippet.title,
-                url: `https://www.youtube.com/watch?v=${item.id.videoId}`,
-                id: item.id.videoId,
-                thumbnail: item.snippet.thumbnails?.high?.url || item.snippet.thumbnails?.default?.url || `https://img.youtube.com/vi/${item.id.videoId}/hqdefault.jpg`,
-                channelTitle: item.snippet.channelTitle
-            }));
+            const videoIds = data.items.map((item: any) => item.id.videoId).join(',');
+            const durationMap = new Map<string, { duration: string; durationSeconds: number }>();
+
+            try {
+                const { data: videoDetails } = await axios.get('https://www.googleapis.com/youtube/v3/videos', {
+                    params: {
+                        part: 'contentDetails',
+                        id: videoIds,
+                        key: key
+                    },
+                    timeout: 3000
+                });
+
+                if (videoDetails && videoDetails.items) {
+                    for (const item of videoDetails.items) {
+                        const isoDuration = item.contentDetails?.duration || '';
+                        const secs = this.parseISO8601Duration(isoDuration);
+                        durationMap.set(item.id, {
+                            duration: this.formatDuration(secs),
+                            durationSeconds: secs
+                        });
+                    }
+                }
+            } catch (err: any) {
+                console.warn(`[Youtube API] Videos details fetch failed:`, err.message);
+            }
+
+            return data.items.map((item: any) => {
+                const details = durationMap.get(item.id.videoId) || { duration: '0:00', durationSeconds: 0 };
+                return {
+                    title: item.snippet.title,
+                    url: `https://www.youtube.com/watch?v=${item.id.videoId}`,
+                    id: item.id.videoId,
+                    thumbnail: item.snippet.thumbnails?.high?.url || item.snippet.thumbnails?.default?.url || `https://img.youtube.com/vi/${item.id.videoId}/hqdefault.jpg`,
+                    channelTitle: item.snippet.channelTitle,
+                    duration: details.duration,
+                    durationSeconds: details.durationSeconds
+                };
+            });
         } catch (err: any) {
             console.warn(`[Youtube API] Search failed:`, err.message);
             return [];

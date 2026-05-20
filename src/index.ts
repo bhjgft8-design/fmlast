@@ -32,7 +32,7 @@ export const shoukaku = new Shoukaku(new Connectors.DiscordJS(client), config.LA
     resume: true,
     reconnectTries: 100,
     reconnectInterval: 10000,
-    restTimeout: 15000
+    restTimeout: 10000
 });
 
 // Override default node resolver to deprioritize degraded nodes

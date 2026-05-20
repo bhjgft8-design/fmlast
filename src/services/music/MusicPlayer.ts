@@ -23,7 +23,7 @@ const ARTIST_OVERRIDES: Record<string, { cluster: string, related?: string[] }> 
 };
 
 export class MusicPlayer {
-    private static resolveWithTimeout(node: any, query: string, timeoutMs = 2500): Promise<any> {
+    private static resolveWithTimeout(node: any, query: string, timeoutMs = 2000): Promise<any> {
         return Promise.race([
             node.rest.resolve(query),
             new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), timeoutMs))
@@ -43,7 +43,7 @@ export class MusicPlayer {
             nodes.map(async (node) => {
                 const startTime = Date.now();
                 try {
-                    const res = await this.resolveWithTimeout(node, query, 3000);
+                    const res = await this.resolveWithTimeout(node, query, 2000);
                     if (!res?.data || res.loadType === 'empty' || res.loadType === 'error') {
                         throw new Error(`Node ${node.name} returned no data`);
                     }
@@ -154,6 +154,11 @@ export class MusicPlayer {
 
         if (track) {
             QueueManager.addTrack(guildId, track);
+        }
+
+        // Proactively prefetch the next track if we are already playing to ensure gapless transitions and instant skips
+        if (track && queue.isPlaying) {
+            this.prefetchNextTrack(guildId).catch(() => {});
         }
 
         // Kickstart the queue process
@@ -573,17 +578,6 @@ export class MusicPlayer {
             // Reset prefetchTriggered for the new track
             (queue as any).prefetchTriggered = false;
 
-            // Start on-the-fly UTR metadata enrichment concurrently in the background
-            const enrichPromise = !track.artworkUrl
-                ? (async () => {
-                    console.log(`[MusicPlayer] ⚡ Dynamic UTR metadata enrichment for: ${track.title}`);
-                    const { MetadataService } = await import('../bot/MetadataService');
-                    await MetadataService.enrich(track, null, null).catch(err => {
-                        console.warn(`[MusicPlayer] Dynamic enrichment failed for ${track.title}:`, err);
-                    });
-                })()
-                : Promise.resolve();
-
             console.log(`[MusicPlayer] 🎵 Preparing to play: ${track.title}`);
             const { LyricsService } = await import('./LyricsService');
             LyricsService.cleanupForGuild(guildId);
@@ -656,17 +650,73 @@ export class MusicPlayer {
             queue.currentTrack = track; // Set BEFORE playTrack to avoid race condition
             queue.lastPlayedTrack = track;
             
-            // Await the enrichment promise before displaying the UI
-            await enrichPromise.catch(() => {});
-            
-            // Send UI first and wait for it
-            await MusicUIController.sendPlaybackUI(guildId, track).catch(e => console.error(`[MusicPlayer] UI Error:`, e));
+            // 1. Send UI in background (non-blocking) to eliminate Discord API roundtrip latency
+            const isRetry = _skipCount > 0;
+            MusicUIController.sendPlaybackUI(guildId, track, isRetry)
+                .catch(e => console.error(`[MusicPlayer] UI Error:`, e));
 
-            // Start audio and immediately reset filters safely without stopTrack() triggering ghost end events
-            await queue.player.playTrack({ track: { encoded: lavalinkTrack.encoded } });
-            await queue.player.setFilters({}).catch(() => {});
+            // 2. Start audio playback immediately in parallel
+            queue.player.playTrack({ track: { encoded: lavalinkTrack.encoded } })
+                .then(() => queue.player.setFilters({}).catch(() => {}))
+                .catch(err => console.error(`[MusicPlayer] playTrack failed:`, err));
             
-            console.log(`[MusicPlayer] ✅ Playback started: ${track.title}`);
+            console.log(`[MusicPlayer] ✅ Playback started instantly: ${track.title}`);
+
+            // Background metadata enrichment and lyrics check (Non-blocking)
+            (async () => {
+                try {
+                    const promises: Promise<any>[] = [];
+                    
+                    if (!track.artworkUrl) {
+                        console.log(`[MusicPlayer] ⚡ Background UTR metadata enrichment for: ${track.title}`);
+                        const { MetadataService } = await import('../bot/MetadataService');
+                        promises.push(
+                            MetadataService.enrich(track, null, null).catch(err => {
+                                console.warn(`[MusicPlayer] Dynamic enrichment failed for ${track.title}:`, err);
+                            })
+                        );
+                    }
+
+                    if (!queue.hasLyrics) {
+                        promises.push(
+                            (async () => {
+                                const artist = track.artistName || (track.channelTitle || '').replace(' - Topic', '') || 'Unknown Artist';
+                                const title = track.trackTitle || (track.title || '').replace(/\(.*?\)|\[.*?\]/g, '').trim() || 'Unknown Track';
+                                const duration = track.durationSeconds || 0;
+                                const params = new URLSearchParams({
+                                    artist_name: artist,
+                                    track_name: title,
+                                    ...(duration ? { duration: String(duration) } : {})
+                                });
+                                const res = await fetch(`https://lrclib.net/api/get?${params}`, {
+                                    headers: { 'User-Agent': 'fm-discord-bot/1.0' }
+                                });
+                                if (res.ok) {
+                                    queue.hasLyrics = true;
+                                }
+                            })().catch(() => {})
+                        );
+                    }
+
+                    if (promises.length > 0) {
+                        await Promise.all(promises);
+
+                        // Once enrichment and lyrics check completes, update the now playing message if this track is still active
+                        const activeQueue = QueueManager.getQueue(guildId);
+                        if (activeQueue && activeQueue.currentTrack?.id === track.id) {
+                            console.log(`[MusicPlayer] ✨ Enrichment & Lyrics check completed for ${track.title}. Updating UI.`);
+                            await MusicUIController.updateNowPlayingMessage(guildId).catch(() => {});
+                            
+                            // Update discord presence/status with cleaned name
+                            const cleanTitle = track.artistName ? `${track.artistName} - ${track.trackTitle || track.title}` : track.title;
+                            VoiceStatusService.setTrackStatus(client, activeQueue.voiceChannelId, cleanTitle).catch(() => {});
+                            VoiceStatusService.updatePresence(client, cleanTitle).catch(() => {});
+                        }
+                    }
+                } catch (err) {
+                    console.error(`[MusicPlayer] Background enrichment task failed:`, err);
+                }
+            })();
             
             // Background status updates
             const displayTitle = track.artistName ? `${track.artistName} - ${track.trackTitle || track.title}` : track.title;
@@ -803,7 +853,7 @@ export class MusicPlayer {
                 this.processQueue(guildId).catch(err => {
                     console.error(`[MusicPlayer] End event processQueue error:`, err);
                 });
-            }, 250);
+            }, 100);
         });
 
         queue.player.on('exception', async (data) => {
@@ -836,7 +886,7 @@ export class MusicPlayer {
             setTimeout(() => {
                 exceptionPending = false;
                 this.processQueue(guildId, 1).catch(() => {});
-            }, 250);
+            }, 100);
         });
 
         this.startWatchdog(guildId);
@@ -1030,7 +1080,7 @@ export class MusicPlayer {
 
         queue.progressInterval = setInterval(() => {
             MusicUIController.updateNowPlayingMessage(guildId).catch(() => {});
-        }, 5000);
+        }, 10000);
     }
 
     private static stopProgressUpdate(guildId: string) {

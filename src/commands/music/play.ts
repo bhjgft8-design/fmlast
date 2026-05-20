@@ -123,7 +123,7 @@ export default class PlayCommand extends BaseCommand {
                     if (isSlash) await interactionOrMessage.deleteReply().catch(() => { });
                 } else {
                     const builder = new ComponentsV2()
-                        .addThumbnail(res.artworkUrl || "https://i.imgur.com/Gis9d79.png", `### 📝 Added to queue\n**${res.artist} - ${res.track.replace(/\[.*?\]|\(.*?\)/g, '')}**\n-# Position in queue: ${res.position}`);
+                        .addText(`### 📝 Added to queue\n**${res.artist} - ${res.track.replace(/\[.*?\]|\(.*?\)/g, '')}**\n-# Position in queue: ${res.position}`);
 
                     if (isSlash) await interactionOrMessage.editReply(builder.build());
                     else await interactionOrMessage.reply(builder.build());

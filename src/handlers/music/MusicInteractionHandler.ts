@@ -340,10 +340,97 @@ export class MusicInteractionHandler {
     static async handleSelectMenu(interaction: StringSelectMenuInteraction) {
         const [action, guildId] = interaction.customId.split(':');
         
-        if (action === 'mp-filter-select') {
+        if (action === 'mp-action-filter-select') {
+            const val = interaction.values[0];
+            const queue = QueueManager.getQueue(guildId);
+            if (!queue) {
+                return interaction.reply({ content: '❌ No active player found.', ephemeral: true });
+            }
+
+            // Verify user is in the same voice channel
+            const member = interaction.member as any;
+            const voiceChannel = member.voice?.channel;
+            if (!voiceChannel || voiceChannel.id !== queue.voiceChannelId) {
+                return interaction.reply({ content: '❌ You must be in the same voice channel to use controls.', ephemeral: true });
+            }
+
+            if (val.startsWith('action:')) {
+                const subAction = val.split(':')[1];
+                switch (subAction) {
+                    case 'queue': {
+                        const tracks = queue.tracks.slice(0, 10).map((t, i) => `${i + 1}. **${t.title}**`).join('\n') || '*Queue is empty*';
+                        const qBuilder = new ComponentsV2()
+                            .setAccent(0x1DB954)
+                            .addText(`### 📄 Current Queue\n${tracks}${queue.tracks.length > 10 ? `\n...and ${queue.tracks.length - 10} more` : ''}`);
+                        await interaction.reply({ ...qBuilder.build(), ephemeral: true });
+                        break;
+                    }
+                    case 'trackinfo': {
+                        const track = queue.currentTrack;
+                        if (!track) return;
+                        const infoBuilder = new ComponentsV2()
+                            .setAccent(0x1DB954)
+                            .addText(`### ℹ️ Track Info\n**Title:** ${track.title}\n**Artist:** ${track.artistName || track.channelTitle}\n**Duration:** ${track.duration}\n**Requester:** ${track.requesterName}`);
+                        await interaction.reply({ ...infoBuilder.build(), ephemeral: true });
+                        break;
+                    }
+                    case 'lyrics': {
+                        await interaction.deferReply({ ephemeral: false });
+                        const lyrics = await MusicPlayer.getLyrics(guildId);
+                        if (!lyrics) {
+                            return interaction.editReply({ content: '❌ No lyrics found for this track.' });
+                        }
+                        if (lyrics.lines && lyrics.lines.length > 0) {
+                            const pos = queue.player?.position ?? 0;
+                            const firstFrame = LyricsService.buildLiveLyricsUI(lyrics.lines, pos, guildId);
+                            
+                            const msg = await interaction.editReply({ ...firstFrame }) as unknown as Message;
+                            await LyricsService.startLiveLyrics(guildId, msg, lyrics.lines);
+                        } else {
+                            const builder = new ComponentsV2()
+                                .setAccent(0x1DB954)
+                                .addText(`### 🎤 Lyrics\n\n${(lyrics.text || '').substring(0, 3500)}`);
+                            await interaction.editReply(builder.build());
+                        }
+                        break;
+                    }
+                    case 'volume': {
+                        const volModal = {
+                            title: 'Adjust Volume',
+                            custom_id: `mp-modal-volume:${guildId}`,
+                            components: [{
+                                type: ComponentType.ActionRow,
+                                components: [{
+                                    type: ComponentType.TextInput,
+                                    custom_id: 'volume_input',
+                                    label: 'Volume (1-100)',
+                                    style: TextInputStyle.Short,
+                                    min_length: 1,
+                                    max_length: 3,
+                                    placeholder: 'Enter volume level...',
+                                    value: String(queue.player?.volume || 100),
+                                    required: true
+                                }]
+                            }]
+                        };
+                        await interaction.showModal(volModal as any);
+                        break;
+                    }
+                    case 'autoplay': {
+                        MusicPlayer.toggleAutoplay(guildId);
+                        await interaction.deferUpdate();
+                        break;
+                    }
+                }
+            } else if (val.startsWith('filter:')) {
+                const filter = val.split(':')[1];
+                const FILTER_MAP = FiltersCommand.FILTER_MAP;
+                await interaction.deferUpdate();
+                await MusicPlayer.setFilters(guildId, FILTER_MAP[filter === 'clear' ? 'reset' : filter] || {});
+            }
+        } else if (action === 'mp-filter-select') {
             const filter = interaction.values[0];
             const FILTER_MAP = FiltersCommand.FILTER_MAP;
-
 
             await interaction.deferUpdate();
             await MusicPlayer.setFilters(guildId, FILTER_MAP[filter] || {});

@@ -27,7 +27,7 @@ export default class TrackInfoCommand extends BaseCommand {
         
         const builder = new ComponentsV2()
             .setAccent(0x5865F2)
-            .addThumbnail(track.artworkUrl || track.thumbnail,
+            .addText(
                 `### ℹ️ Track Details\n` +
                 `**Title:** [${track.trackTitle || track.title}](${track.url})\n` +
                 `**Artist:** ${track.artistName || track.channelTitle}\n` +

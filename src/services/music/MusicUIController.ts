@@ -17,34 +17,27 @@ export class MusicUIController {
      * Builds and sends the playback UI to the queue's text channel.
      * Replaces the old message if it exists.
      */
-    static async sendPlaybackUI(guildId: string, track: YoutubeResult): Promise<void> {
+    static async sendPlaybackUI(guildId: string, track: YoutubeResult, isRetry = false): Promise<void> {
         const queue = QueueManager.getQueue(guildId);
         if (!queue) return;
+
+        if (isRetry && queue.nowPlayingMessage) {
+            const ui = await this.buildPlaybackUI(guildId, track, 0, false);
+            try {
+                await queue.nowPlayingMessage.edit(ui);
+                return;
+            } catch (err) {
+                // Message might have been deleted, fall back to normal path
+            }
+        }
 
         if (queue.nowPlayingMessage) {
             queue.nowPlayingMessage.delete().catch(() => { });
             queue.nowPlayingMessage = undefined;
         }
 
-        // Fast check for lyrics
+        // Initialize lyrics flag (background worker will populate this async)
         queue.hasLyrics = false;
-        const artist = track.artistName || (track.channelTitle || '').replace(' - Topic', '') || 'Unknown Artist';
-        const title = track.trackTitle || (track.title || '').replace(/\(.*?\)|\[.*?\]/g, '').trim() || 'Unknown Track';
-        const duration = track.durationSeconds || 0;
-
-        try {
-            const params = new URLSearchParams({
-                artist_name: artist,
-                track_name: title,
-                ...(duration ? { duration: String(duration) } : {})
-            });
-            const res = await fetch(`https://lrclib.net/api/get?${params}`, {
-                headers: { 'User-Agent': 'fm-discord-bot/1.0' }
-            });
-            if (res.ok) {
-                queue.hasLyrics = true;
-            }
-        } catch { }
 
         const ui = await this.buildPlaybackUI(guildId, track, 0, false);
 
@@ -88,7 +81,7 @@ export class MusicUIController {
     private static async buildPlaybackUI(guildId: string, track: YoutubeResult, elapsed: number, isPaused: boolean) {
         const queue = QueueManager.getQueue(guildId);
         const total = track.durationSeconds || 0;
-        const progressBar = createProgressBar(elapsed, total);
+        const progressBar = createProgressBar(elapsed, total, 12);
 
         const timeInfo = `\`${formatDuration(elapsed)} / ${track.duration || '0:00'}\``;
 
@@ -101,9 +94,8 @@ export class MusicUIController {
         }
 
         const scrobbleInfo = (track as any).scrobbleCount ? ` •  Scrobbling for ${(track as any).scrobbleCount} users` : '';
-        const statsLine = track.statsText ? (track.statsText.startsWith('\n') ? track.statsText : `\n${track.statsText}`) : '';
+        const statsLine = track.statsText ? track.statsText.trim() : '';
 
-        const coverUrl = track.artworkUrl || track.thumbnail || 'https://i.imgur.com/Gis9d79.png';
         const artistDisplay = track.artistName || (track.channelTitle || '').replace(' - Topic', '') || 'Unknown Artist';
         const titleDisplay = (track.trackTitle || track.title || 'Unknown Track').replace(/\[.*?\]|\(.*?\)/g, '').trim();
 
@@ -117,56 +109,58 @@ export class MusicUIController {
 
         const builder = new ComponentsV2()
             .setAccent(embedColor)
-            .addThumbnail(coverUrl,
-                `###  ${artistDisplay} - ${titleDisplay}${repeatInfo}${autoplayInfo}\n` +
-                `${statsLine ? statsLine.trimStart() + '\n\n' : ''}` +
-                `${progressBar} ${timeInfo}\n\n` +
-                `-# Added to queue by ${track.requesterName || 'Unknown'}${scrobbleInfo}`
-            )
-            .addSeparator();
+            .addText(
+                `**${titleDisplay}** - ${artistDisplay}${repeatInfo}${autoplayInfo}\n` +
+                `${statsLine ? `${statsLine}\n` : ''}` +
+                `${progressBar}  ${timeInfo}\n` +
+                `-# Requested by ${track.requesterName || 'Unknown'}${scrobbleInfo}`
+            );
 
         const repeatEmojis: Record<string, string> = { 'off': '🔁', 'one': '🔂', 'all': '🔁' };
         const repeatMode = queue?.repeatMode || 'off';
 
-        // ROW 1: Playback Controls
+        // ROW 1: Core Playback Controls (5 Buttons)
         builder.addRow([
             { type: ComponentType.Button, style: ButtonStyle.Secondary, label: '', emoji: isPaused ? '▶️' : '⏸️', custom_id: isPaused ? `mp-resume:${guildId}` : `mp-pause:${guildId}` },
             { type: ComponentType.Button, style: ButtonStyle.Secondary, label: '', emoji: '⏭️', custom_id: `mp-skip:${guildId}` },
             { type: ComponentType.Button, style: ButtonStyle.Secondary, label: '', emoji: repeatEmojis[repeatMode] || '🔁', custom_id: `mp-repeat:${guildId}` },
-            { type: ComponentType.Button, style: ButtonStyle.Secondary, label: '', emoji: '🔊', custom_id: `mp-volume:${guildId}` },
+            { type: ComponentType.Button, style: ButtonStyle.Secondary, label: '', emoji: '🔀', custom_id: `mp-shuffle:${guildId}` },
             { type: ComponentType.Button, style: ButtonStyle.Danger, label: '', emoji: '🛑', custom_id: `mp-stop:${guildId}` }
         ]);
 
-        // ROW 2: Library & Info
-        const row2: any[] = [
-            { type: ComponentType.Button, style: ButtonStyle.Secondary, label: '', emoji: '🔀', custom_id: `mp-shuffle:${guildId}` },
-            { type: ComponentType.Button, style: ButtonStyle.Secondary, label: '', emoji: '📄', custom_id: `mp-queue:${guildId}` },
-            { type: ComponentType.Button, style: ButtonStyle.Secondary, label: '', emoji: 'ℹ️', custom_id: `mp-trackinfo:${guildId}` },
-            { type: ComponentType.Button, style: queue?.autoplay ? ButtonStyle.Success : ButtonStyle.Secondary, label: '', emoji: '🤖', custom_id: `mp-autoplay:${guildId}` }
+        // ROW 2: Combined Actions & Audio Filters Select Menu
+        const selectOptions: any[] = [
+            // Actions
+            { label: 'View Queue', value: 'action:queue', emoji: '📄', description: 'Show the upcoming tracks in the queue' },
+            { label: 'Track Details', value: 'action:trackinfo', emoji: 'ℹ️', description: 'Show metadata and details of the current track' },
+            { label: `Autoplay: ${queue?.autoplay ? 'Enabled 🟢' : 'Disabled 🔴'}`, value: 'action:autoplay', emoji: '🤖', description: 'Toggle automatic recommendation mode' },
+            { label: 'Adjust Volume', value: 'action:volume', emoji: '🔊', description: 'Open volume adjustment modal' }
         ];
-        if (queue?.hasLyrics) {
-            row2.push({ type: ComponentType.Button, style: ButtonStyle.Primary, label: '', emoji: '🎤', custom_id: `mp-lyrics:${guildId}` });
-        }
-        builder.addRow(row2);
 
-        // ROW 3: Effects Select Menu
+        if (queue?.hasLyrics) {
+            selectOptions.push({ label: 'Show Live Lyrics', value: 'action:lyrics', emoji: '🎤', description: 'Display real-time synchronized lyrics' });
+        }
+
+        // Add separator-like filter options
+        selectOptions.push(
+            { label: 'Clear All Filters', value: 'filter:clear', emoji: '❌', description: 'Reset all active audio filters and effects' },
+            { label: 'Bass Boost', value: 'filter:bassboost', emoji: '🔊', description: 'Enhance low-end bass frequencies' },
+            { label: 'Nightcore', value: 'filter:nightcore', emoji: '⚡', description: 'Increase speed and pitch' },
+            { label: 'Vaporwave', value: 'filter:vaporwave', emoji: '🌊', description: 'Slowed and pitch-lowered aesthetic' },
+            { label: 'Daycore', value: 'filter:daycore', emoji: '🕰️', description: 'Slowed and slightly bass boosted' },
+            { label: '8D Audio', value: 'filter:8d', emoji: '🎧', description: '360 degree rotating sound effect' },
+            { label: 'Pop Equalizer', value: 'filter:pop', emoji: '🎸', description: 'Optimized preset for pop/rock music' },
+            { label: 'Treble Boost', value: 'filter:treble', emoji: '🎼', description: 'Boost high-frequency clarity' },
+            { label: 'Tremolo', value: 'filter:tremolo', emoji: '📳', description: 'Dynamic volume wave modulation' },
+            { label: 'Vibrato', value: 'filter:vibrato', emoji: '〰️', description: 'Dynamic pitch wave modulation' },
+            { label: 'Distortion', value: 'filter:distortion', emoji: '💢', description: 'Aggressive gritty audio overdrive' }
+        );
+
         builder.addRow([{
             type: ComponentType.StringSelect,
-            custom_id: `mp-filter-select:${guildId}`,
-            placeholder: '✨ Apply Audio Filters...',
-            options: [
-                { label: 'Clear Filters', value: 'clear', emoji: '❌' },
-                { label: 'Bassboost', value: 'bassboost', emoji: '🔊' },
-                { label: 'Nightcore', value: 'nightcore', emoji: '⚡' },
-                { label: 'Vaporwave', value: 'vaporwave', emoji: '🌊' },
-                { label: 'Daycore', value: 'daycore', emoji: '🕰️' },
-                { label: 'Tremolo', value: 'tremolo', emoji: '📳' },
-                { label: 'Vibrato', value: 'vibrato', emoji: '〰️' },
-                { label: 'Distortion', value: 'distortion', emoji: '💢' },
-                { label: '8D', value: '8d', emoji: '🎧' },
-                { label: 'Pop', value: 'pop', emoji: '🎸' },
-                { label: 'Treble', value: 'treble', emoji: '🎼' },
-            ]
+            custom_id: `mp-action-filter-select:${guildId}`,
+            placeholder: '⚙️ Actions & Audio Filters...',
+            options: selectOptions
         }]);
 
         return builder.build();
