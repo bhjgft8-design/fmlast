@@ -832,8 +832,10 @@ export class MusicPlayer {
 
             // Check for premature stream finish (connection drop / closed prematurely by YouTube/Lavalink)
             const expectedDuration = queue.currentTrack?.durationSeconds ? queue.currentTrack.durationSeconds * 1000 : 0;
-            if (data.reason === 'finished' && expectedDuration > 15000 && playDuration > 5000 && (expectedDuration - playDuration) > 12000) {
-                console.warn(`[MusicPlayer] ⚠️ Track ended prematurely at ${Math.round(playDuration / 1000)}s of ${Math.round(expectedDuration / 1000)}s. Recovering...`);
+            const currentPosition = this.getPosition(queue);
+            const remainingMs = expectedDuration - currentPosition;
+            if (data.reason === 'finished' && expectedDuration > 15000 && currentPosition > 5000 && remainingMs > 20000 && currentPosition < expectedDuration * 0.95) {
+                console.warn(`[MusicPlayer] ⚠️ Track ended prematurely at ${Math.round(currentPosition / 1000)}s of ${Math.round(expectedDuration / 1000)}s. Recovering...`);
                 if (endTimeout) clearTimeout(endTimeout);
                 this.recoverPlayback(guildId).catch(err => {
                     console.error(`[MusicPlayer] Premature end recovery failed:`, err);
