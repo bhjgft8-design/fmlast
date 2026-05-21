@@ -37,6 +37,8 @@ export interface GuildQueue {
     autoplay?: boolean;
     lastUpdate?: number;
     lastHeartbeat?: number;   // Timestamp of last player audio update (for watchdog)
+    volume?: number;
+    emptyChannelTimer?: NodeJS.Timeout;
 }
 
 const queues = new Map<string, GuildQueue>();
@@ -82,6 +84,7 @@ export class QueueManager {
             repeatMode: 'off',
             repeatCount: 0,
             consecutiveErrors: 0,
+            volume: 100,
         };
 
         queues.set(guildId, queue);
@@ -94,6 +97,7 @@ export class QueueManager {
 
         if (queue.inactivityTimer) clearTimeout(queue.inactivityTimer);
         if (queue.progressInterval) clearInterval(queue.progressInterval);
+        if (queue.emptyChannelTimer) clearTimeout(queue.emptyChannelTimer);
         
         queue.player?.stopTrack().catch(() => {});
         shoukaku.leaveVoiceChannel(guildId).catch(() => {});

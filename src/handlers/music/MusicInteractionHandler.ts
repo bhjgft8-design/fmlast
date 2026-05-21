@@ -61,7 +61,7 @@ export class MusicInteractionHandler {
                 }
                 if (lyrics.lines && lyrics.lines.length > 0) {
                     const queue = QueueManager.getQueue(guildId);
-                    const pos = queue?.player?.position ?? 0;
+                    const pos = queue ? MusicPlayer.getPosition(queue) : 0;
                     const firstFrame = LyricsService.buildLiveLyricsUI(lyrics.lines, pos, guildId);
                     
                     const msg = await interaction.editReply({ ...firstFrame }) as unknown as Message;
@@ -381,7 +381,7 @@ export class MusicInteractionHandler {
                             return interaction.editReply({ content: '❌ No lyrics found for this track.' });
                         }
                         if (lyrics.lines && lyrics.lines.length > 0) {
-                            const pos = queue.player?.position ?? 0;
+                            const pos = MusicPlayer.getPosition(queue);
                             const firstFrame = LyricsService.buildLiveLyricsUI(lyrics.lines, pos, guildId);
                             
                             const msg = await interaction.editReply({ ...firstFrame }) as unknown as Message;

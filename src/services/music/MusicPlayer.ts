@@ -192,6 +192,10 @@ export class MusicPlayer {
             clearTimeout(queue.inactivityTimer);
             queue.inactivityTimer = undefined;
         }
+        if (queue.emptyChannelTimer) {
+            clearTimeout(queue.emptyChannelTimer);
+            queue.emptyChannelTimer = undefined;
+        }
 
         // Watchdog
         const watchdog = this.watchdogIntervals.get(guildId);
@@ -205,6 +209,11 @@ export class MusicPlayer {
 
         // Prefetch cache entries for this guild's tracks
         queue.tracks.forEach(t => MusicPlayer.prefetchCache.delete(t.url || t.title));
+
+        // Clean up lyrics service live sync/messages
+        import('./LyricsService').then(({ LyricsService }) => {
+            LyricsService.cleanupForGuild(guildId);
+        }).catch(() => {});
     }
 
     static getPosition(queue: GuildQueue): number {
@@ -241,6 +250,11 @@ export class MusicPlayer {
             queue.player.setPaused(true);
             queue.state.transition('paused');
             queue.isPaused = true;
+
+            // Freeze playhead estimation at the exact moment of pausing
+            queue.lastKnownPosition = this.getPosition(queue);
+            queue.lastPositionTimestamp = Date.now();
+
             this.stopProgressUpdate(guildId);
             MusicUIController.updateNowPlayingMessage(guildId);
             return true;
@@ -254,6 +268,10 @@ export class MusicPlayer {
             queue.player.setPaused(false);
             queue.state.transition('playing');
             queue.isPaused = false;
+
+            // Resume playhead estimation from the exact resumption moment
+            queue.lastPositionTimestamp = Date.now();
+
             this.startProgressUpdate(guildId);
             MusicUIController.updateNowPlayingMessage(guildId);
             return true;
@@ -298,6 +316,10 @@ export class MusicPlayer {
                 this.setupPlayerEvents(snap.guildId);
                 
                 await queue.player?.playTrack({ track: { encoded: lavalinkTrack.encoded } });
+                if (snap.volume !== undefined && queue.player) {
+                    queue.volume = snap.volume;
+                    await queue.player.setGlobalVolume(snap.volume).catch(() => {});
+                }
                 
                 if (snap.positionMs > 2000) {
                     await new Promise(r => setTimeout(r, 1000));
@@ -375,6 +397,9 @@ export class MusicPlayer {
         const queue = QueueManager.getQueue(guildId);
         if (queue && queue.player) {
             await queue.player.seekTo(positionMs);
+            queue.lastKnownPosition = positionMs;
+            queue.lastPositionTimestamp = Date.now();
+            queue.lastUpdate = Date.now();
         }
     }
 
@@ -382,6 +407,7 @@ export class MusicPlayer {
         const queue = QueueManager.getQueue(guildId);
         if (queue && queue.player) {
             await queue.player.setGlobalVolume(volume);
+            queue.volume = volume;
         }
     }
 
@@ -755,6 +781,10 @@ export class MusicPlayer {
             queue.lastUpdate = Date.now();
             queue.lastStart = Date.now();
             queue.lastHeartbeat = Date.now();
+
+            // Reset position estimation for the new track
+            queue.lastKnownPosition = 0;
+            queue.lastPositionTimestamp = Date.now();
             
             const nodeName = queue.player?.node.name;
             if (nodeName) {
@@ -1032,6 +1062,9 @@ export class MusicPlayer {
             // Play — isolated try/catch so a stale player doesn't crash the process
             try {
                 await queue.player.playTrack({ track: { encoded: lavalinkTrack.encoded } });
+                if (queue.volume !== undefined) {
+                    await queue.player.setGlobalVolume(queue.volume).catch(() => {});
+                }
             } catch (e: any) {
                 console.warn(`[Watchdog] playTrack failed (player gone?): ${e.message}`);
                 queue.state.transition('idle');
@@ -1057,6 +1090,9 @@ export class MusicPlayer {
             queue.isPlaying = true;
             queue.state.transition('playing');
             queue.lastHeartbeat = Date.now();
+            queue.lastKnownPosition = seekToMs;
+            queue.lastPositionTimestamp = Date.now();
+            queue.lastUpdate = Date.now();
 
             const mins = Math.floor(seekToMs / 60000);
             const secs = String(Math.floor((seekToMs % 60000) / 1000)).padStart(2, '0');

@@ -426,6 +426,7 @@ model QueueSnapshot {
   currentTrack   String   @map("current_track") @db.Text
   tracks         String   @map("tracks") @db.Text
   positionMs     Int      @map("position_ms")
+  volume         Int      @default(100) @map("volume")
   createdAt      DateTime @default(now()) @map("created_at")
 
   @@map("queue_snapshots")

@@ -59,10 +59,8 @@ export class MusicUIController {
         const track = queue.currentTrack;
         if (!track) return;
 
-        let elapsedMs = queue.player?.position ?? 0;
-        if (!queue.isPaused && queue.lastUpdate) {
-            elapsedMs += (Date.now() - queue.lastUpdate);
-        }
+        const { MusicPlayer } = await import('./MusicPlayer');
+        const elapsedMs = MusicPlayer.getPosition(queue);
         const elapsed = Math.floor(elapsedMs / 1000);
 
         const ui = await this.buildPlaybackUI(guildId, track, elapsed, queue.isPaused);

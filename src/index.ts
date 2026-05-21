@@ -138,34 +138,97 @@ setInterval(async () => {
     } catch { /* ignore */ }
 }, 120000);
 
-// Capture bot kicks and moves from voice channels
+// Capture bot kicks, moves, and empty channel auto-disconnect
 client.on('voiceStateUpdate', async (oldState, newState) => {
     const selfId = client.user?.id;
     if (!selfId) return;
 
-    if (oldState.member?.id === selfId) {
-        const guildId = oldState.guild.id;
+    const guildId = oldState.guild.id || newState.guild.id;
+
+    // ── Handle bot's own voice state changes ──
+    if (oldState.member?.id === selfId || newState.member?.id === selfId) {
         try {
             const { QueueManager } = await import('./services/music/QueueManager');
             const { MusicPlayer } = await import('./services/music/MusicPlayer');
             const queue = QueueManager.getQueue(guildId);
             if (!queue) return;
 
-            // 1. Kicked from channel
-            if (oldState.channelId && !newState.channelId) {
-                if (queue.state.is('recovering')) {
-                    console.log(`[VoiceState] Bot disconnected from voice channel in guild ${guildId} due to recovery playback — ignoring.`);
+            if (oldState.member?.id === selfId) {
+                // 1. Kicked from channel
+                if (oldState.channelId && !newState.channelId) {
+                    if (queue.state.is('recovering')) {
+                        console.log(`[VoiceState] Bot disconnected from voice channel in guild ${guildId} due to recovery playback — ignoring.`);
+                        return;
+                    }
+                    console.log(`[VoiceState] Bot was kicked from voice channel in guild ${guildId}. Cleaning up.`);
+                    MusicPlayer.stop(guildId);
                     return;
                 }
-                console.log(`[VoiceState] Bot was kicked from voice channel in guild ${guildId}. Cleaning up.`);
-                MusicPlayer.stop(guildId);
+                // 2. Moved to another channel
+                else if (oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
+                    console.log(`[VoiceState] Bot was moved to channel ${newState.channelId} in guild ${guildId}. Recovering...`);
+                    queue.voiceChannelId = newState.channelId;
+                    MusicPlayer.recoverPlayback(guildId).catch(() => {});
+                    return;
+                }
             }
-            // 2. Moved to another channel
-            else if (oldState.channelId && newState.channelId && oldState.channelId !== newState.channelId) {
-                console.log(`[VoiceState] Bot was moved to channel ${newState.channelId} in guild ${guildId}. Recovering...`);
-                queue.voiceChannelId = newState.channelId;
-                MusicPlayer.recoverPlayback(guildId).catch(() => {});
+        } catch { /* ignore */ }
+        return;
+    }
+
+    // ── Empty channel auto-disconnect (when a human leaves) ──
+    // Only trigger if a non-bot member left a voice channel
+    if (oldState.channelId && oldState.member && !oldState.member.user.bot) {
+        try {
+            const { QueueManager } = await import('./services/music/QueueManager');
+            const { MusicPlayer } = await import('./services/music/MusicPlayer');
+            const queue = QueueManager.getQueue(guildId);
+            if (!queue) return;
+
+            // Only care if the member left the bot's current voice channel
+            if (oldState.channelId !== queue.voiceChannelId) return;
+
+            // Count remaining non-bot members in the bot's channel
+            const channel = oldState.guild.channels.cache.get(queue.voiceChannelId);
+            const humanCount = (channel as any)?.members?.filter((m: any) => !m.user.bot).size ?? 0;
+
+            if (humanCount === 0) {
+                // Start 2-minute countdown before leaving
+                if (queue.emptyChannelTimer) return; // Already counting down
+                console.log(`[VoiceState] 🔇 Guild ${guildId}: Voice channel is empty. Disconnecting in 2 minutes if no one returns...`);
+                queue.emptyChannelTimer = setTimeout(() => {
+                    const refreshed = QueueManager.getQueue(guildId);
+                    if (!refreshed) return;
+                    // Re-check that channel is still empty
+                    const ch = oldState.guild.channels.cache.get(refreshed.voiceChannelId);
+                    const stillEmpty = (ch as any)?.members?.filter((m: any) => !m.user.bot).size === 0;
+                    if (stillEmpty) {
+                        console.log(`[VoiceState] ⏹️ Guild ${guildId}: Still empty after 2 minutes. Stopping.`);
+                        refreshed.textChannel.send('👋 **Disconnected** — voice channel was empty for 2 minutes.').catch(() => {});
+                        MusicPlayer.stop(guildId);
+                    }
+                }, 2 * 60 * 1000);
+            } else if (queue.emptyChannelTimer) {
+                // Someone rejoined — cancel the timer
+                clearTimeout(queue.emptyChannelTimer);
+                queue.emptyChannelTimer = undefined;
+                console.log(`[VoiceState] ✅ Guild ${guildId}: Member rejoined, cancelling empty channel disconnect timer.`);
             }
+        } catch { /* ignore */ }
+        return;
+    }
+
+    // ── Cancel disconnect timer when a human rejoins the bot's channel ──
+    if (newState.channelId && newState.member && !newState.member.user.bot) {
+        try {
+            const { QueueManager } = await import('./services/music/QueueManager');
+            const queue = QueueManager.getQueue(guildId);
+            if (!queue || !queue.emptyChannelTimer) return;
+            if (newState.channelId !== queue.voiceChannelId) return;
+
+            clearTimeout(queue.emptyChannelTimer);
+            queue.emptyChannelTimer = undefined;
+            console.log(`[VoiceState] ✅ Guild ${guildId}: Member joined, cancelling empty channel disconnect timer.`);
         } catch { /* ignore */ }
     }
 });
@@ -242,7 +305,8 @@ async function handleShutdown() {
                         textChannelId: queue.textChannel.id,
                         currentTrack: JSON.stringify(queue.currentTrack),
                         tracks: JSON.stringify(queue.tracks),
-                        positionMs
+                        positionMs,
+                        volume: queue.volume ?? 100
                     }
                 });
                 console.log(`[Snapshot] Saved queue snapshot for guild ${guildId} at position ${positionMs}ms`);
