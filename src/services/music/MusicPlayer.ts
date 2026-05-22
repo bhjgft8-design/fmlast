@@ -24,10 +24,20 @@ const ARTIST_OVERRIDES: Record<string, { cluster: string, related?: string[] }> 
 
 export class MusicPlayer {
     private static resolveWithTimeout(node: any, query: string, timeoutMs = 2000): Promise<any> {
+        let timeoutId: NodeJS.Timeout;
+        const timeoutPromise = new Promise((_, reject) => {
+            timeoutId = setTimeout(() => reject(new Error('Timeout')), timeoutMs);
+        });
         return Promise.race([
-            node.rest.resolve(query),
-            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), timeoutMs))
-        ]);
+            node.rest.resolve(query).then((res: any) => {
+                clearTimeout(timeoutId);
+                return res;
+            }),
+            timeoutPromise
+        ]).catch((err) => {
+            clearTimeout(timeoutId);
+            throw err;
+        });
     }
 
     private static async resolveOnBestNode(
@@ -217,7 +227,7 @@ export class MusicPlayer {
     }
 
     static getPosition(queue: GuildQueue): number {
-        if (!queue.lastKnownPosition || !queue.lastPositionTimestamp) return 0;
+        if (queue.lastKnownPosition === undefined || queue.lastKnownPosition === null || !queue.lastPositionTimestamp) return 0;
         if (queue.state.is('paused')) return queue.lastKnownPosition;
         return queue.lastKnownPosition + (Date.now() - queue.lastPositionTimestamp);
     }
@@ -612,7 +622,7 @@ export class MusicPlayer {
             
             let lavalinkTrack = null;
             const cacheKey = track.url || track.title;
-            const cachedEncoded = MusicPlayer.prefetchCache.get(cacheKey) || ResolutionCache.get(cacheKey);
+            const cachedEncoded = MusicPlayer.prefetchCache.get(cacheKey) || await ResolutionCache.get(cacheKey);
             
             if (cachedEncoded) {
                 lavalinkTrack = { encoded: cachedEncoded };
@@ -660,7 +670,7 @@ export class MusicPlayer {
                 }
 
                 if (lavalinkTrack?.encoded) {
-                    ResolutionCache.set(cacheKey, lavalinkTrack.encoded);
+                    await ResolutionCache.set(cacheKey, lavalinkTrack.encoded);
                 }
             }
 

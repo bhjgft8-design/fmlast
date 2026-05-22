@@ -45,14 +45,17 @@ export default class PlayCommand extends BaseCommand {
 
         try {
             // 1. Setup Voice Connection First (so it's fast)
-            await MusicPlayer.join(guildId, member.voice.channelId!, textChannel);
+            // 1. Setup voice connection and parse input concurrently
+            const [queue, parseResult] = await Promise.all([
+                MusicPlayer.join(guildId, member.voice.channelId!, textChannel),
+                InputParser.parse(
+                    query, 
+                    dbUser?.lastfmUsername, 
+                    dbUser?.lastfmSessionKey
+                )
+            ]);
 
-            // 2. Parse Input cleanly
-            const { tracks: tracksToProcess, collectionName } = await InputParser.parse(
-                query, 
-                dbUser?.lastfmUsername, 
-                dbUser?.lastfmSessionKey
-            );
+            const { tracks: tracksToProcess, collectionName } = parseResult;
 
             if (tracksToProcess.length === 0) {
                 const msg = '❌ Please provide a song, album, or playlist to play!';

@@ -3,6 +3,7 @@ import YouTubeSR from 'youtube-sr';
 import { formatDuration } from '../../utils/formatDuration';
 import { Readable } from 'node:stream';
 import { degradedNodes, sortNodesByQuality } from '../music/DegradedNodes';
+import { CacheService } from '../bot/CacheService';
 
 export interface YoutubeResult {
     title: string;
@@ -130,6 +131,40 @@ export class Youtube {
     public static async searchByQuery(query: string): Promise<YoutubeResult[]> {
         const isUrl = /^https?:\/\//.test(query);
 
+        // Do not cache direct URLs to avoid bloated cache entries for one-off playback,
+        // but cache text searches since users frequently search for the same songs.
+        if (isUrl) {
+            return this.executeSearch(query);
+        }
+
+        const cacheKey = `yt:search:${Buffer.from(query.toLowerCase().trim()).toString('base64')}`;
+        try {
+            const cached = await CacheService.get<YoutubeResult[]>(cacheKey);
+            if (cached && cached.length > 0) {
+                console.log(`[Youtube Search] ⚡ Cache hit for query: "${query}"`);
+                return cached;
+            }
+        } catch (err) {
+            console.warn('[Youtube Search Cache] Failed to read from cache:', err);
+        }
+
+        const results = await this.executeSearch(query);
+
+        if (results && results.length > 0) {
+            try {
+                // Cache search results for 7 days (604800 seconds)
+                await CacheService.set(cacheKey, results, 7 * 24 * 3600);
+            } catch (err) {
+                console.warn('[Youtube Search Cache] Failed to write to cache:', err);
+            }
+        }
+
+        return results;
+    }
+
+    private static async executeSearch(query: string): Promise<YoutubeResult[]> {
+        const isUrl = /^https?:\/\//.test(query);
+
         // 1. Try the official Google YouTube API first if it is a text search query!
         if (!isUrl && process.env.YOUTUBE_API_KEY) {
             const apiResults = await this.searchViaGoogleApi(query);
@@ -178,6 +213,7 @@ export class Youtube {
             const results = await withTimeout(YouTubeSR.search(query, {
                 limit: 5,
                 type: 'video',
+                safeSearch: false
             }), 8000) as any[];
 
             if (!results || !Array.isArray(results)) return [];
