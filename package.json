@@ -6,6 +6,7 @@
   "scripts": {
     "start": "tsx --no-warnings src/index.ts",
     "deploy": "tsx --no-warnings src/scripts/deploy.ts",
+    "rebuild": "docker compose down && docker compose up -d --build bot",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],
