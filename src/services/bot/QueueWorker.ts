@@ -9,7 +9,7 @@ import { IdResolutionService } from './IdResolutionService';
 import { CacheService } from './CacheService';
 import { LRUCache } from 'lru-cache';
 import { randomUUID } from 'crypto';
-import { AlbumGameService } from './AlbumGameService';
+// AlbumGameService removed
 
 const REDIS_URL = process.env.REDIS_URL?.replace(/^["']|["']$/g, '') || '';
 
@@ -443,12 +443,7 @@ async function handleIndexing(job: Job<IndexJobData>) {
 
     await upsertAggregates(user.id, artistCounts, trackCounts, albumCounts, isDelta, l1Cache);
     
-    // ── RPG PROGRESSION (Raids + Mastery) ──
-    try {
-        await AlbumGameService.processSyncResults(user.id, artistCounts, albumCounts);
-    } catch (err) {
-        LoggerService.error('Failed to process RPG sync results', err as Error, 'Queue');
-    }
+    // RPG progression removed
 
     if (maxUtsEncountered > (settings.lastSyncTimestamp || 0)) {
         settings.lastSyncTimestamp = maxUtsEncountered;

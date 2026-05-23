@@ -18,23 +18,16 @@ model User {
   createdAt          DateTime              @default(now())
   updatedAt          DateTime              @updatedAt
   settings           Json?
-  lastAlbumRoll      DateTime?             @map("last_album_roll")
-  albumRolls         Int                   @default(0) @map("album_rolls")
   crownHistory       CrownHistory[]
   crowns             Crown[]
   friendedBy         Friend[]              @relation("UserFriendedBy")
   friends            Friend[]              @relation("UserFriends")
   guilds             GuildMember[]
   importJobs         ImportJob[]
-  albumCollection    UserAlbumCollection[]
-  artistCollection   UserArtistCollection[]
   userAlbums         UserAlbum[]
   userArtists        UserArtist[]
-  gameProfile        UserGameProfile?
   userPlays          UserPlay[]
   userTracks         UserTrack[]
-  activeTours        ActiveTour[]
-  raidContributions  RaidContribution[]
 
   @@index([discordId])
   @@index([lastfmUsername])
@@ -83,12 +76,9 @@ model Artist {
   crowns         Crown[]
   tracks         Track[]
   userAlbums     UserAlbum[]
-  collectedBy    UserArtistCollection[]
   userArtists    UserArtist[]
   userPlays      UserPlay[]
   userTracks     UserTrack[]
-  activeTours    ActiveTour[]
-  raidBosses     RaidBoss[]
 
   @@map("artists")
 }
@@ -133,71 +123,11 @@ model Album {
   createdAt   DateTime              @default(now())
   updatedAt   DateTime              @updatedAt
   artist      Artist                @relation(fields: [artistId], references: [id], onDelete: Cascade)
-  marketItems MarketItem[]
-  collections UserAlbumCollection[]
   userAlbums  UserAlbum[]
   userPlays   UserPlay[]
 
   @@unique([artistId, name])
   @@map("albums")
-}
-
-model UserAlbumCollection {
-  id        String   @id @default(cuid())
-  userId    String   @map("user_id")
-  albumId   String   @map("album_id")
-  rarity      String   @default("COMMON")
-  variant     String   @default("NORMAL")
-  polishLevel Int      @default(0) @map("polish_level")
-  claimedAt   DateTime @default(now()) @map("claimed_at")
-  masteryXp   Int      @default(0) @map("mastery_xp")
-  album       Album    @relation(fields: [albumId], references: [id], onDelete: Cascade)
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, albumId])
-  @@map("user_album_collections")
-}
-
-model UserGameProfile {
-  userId          String    @id @map("user_id")
-  vinylScraps     Int       @default(0) @map("vinyl_scraps")
-  wishlist        String[]  @default([])
-  lastDaily       DateTime? @map("last_daily")
-  collectionValue Int       @default(0) @map("collection_value")
-  quests          Json?
-  questDate       DateTime? @map("quest_date")
-  badges          String[]  @default([])
-  user            User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@map("user_game_profiles")
-}
-
-model UserArtistCollection {
-  id          String   @id @default(cuid())
-  userId      String   @map("user_id")
-  artistId    String   @map("artist_id")
-  rarity      String   @default("COMMON")
-  variant     String   @default("NORMAL")
-  polishLevel Int      @default(0) @map("polish_level")
-  masteryXp   Int      @default(0) @map("mastery_xp")
-  claimedAt   DateTime @default(now()) @map("claimed_at")
-  artist      Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, artistId, rarity, variant])
-  @@map("user_artist_collections")
-}
-
-model MarketItem {
-  id        String   @id @default(cuid())
-  albumId   String   @map("album_id")
-  price     Int
-  rarity    String
-  expiresAt DateTime @map("expires_at")
-  isSold    Boolean  @default(false) @map("is_sold")
-  album     Album    @relation(fields: [albumId], references: [id], onDelete: Cascade)
-
-  @@map("market_items")
 }
 
 model UserArtist {
@@ -376,48 +306,7 @@ model ArtistTag {
   @@map("artist_tags")
 }
 
-model ActiveTour {
-  id               String   @id @default(cuid())
-  userId           String   @map("user_id")
-  artistId         String   @map("artist_id")
-  startTime        DateTime @map("start_time")
-  initialScrobbles Int      @map("initial_scrobbles")
-  user             User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  artist           Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, artistId])
-  @@map("active_tours")
-}
-
-model RaidBoss {
-  id               String   @id @default(cuid())
-  guildId          String?  @map("guild_id")
-  artistId         String   @map("artist_id")
-  targetScrobbles  Int      @map("target_scrobbles")
-  currentScrobbles Int      @default(0) @map("current_scrobbles")
-  startTime        DateTime @default(now()) @map("start_time")
-  endTime          DateTime @map("end_time")
-  status           String   @default("ACTIVE") // ACTIVE, DEFEATED, FAILED
-  notificationChannelId String? @map("notification_channel_id")
-  artist           Artist   @relation(fields: [artistId], references: [id], onDelete: Cascade)
-  contributions    RaidContribution[]
-
-  @@index([status])
-  @@map("raid_bosses")
-}
-
-model RaidContribution {
-  id         String   @id @default(cuid())
-  raidId     String   @map("raid_id")
-  userId     String   @map("user_id")
-  scrobbles  Int      @default(0)
-  updatedAt  DateTime @updatedAt @map("updated_at")
-  raid       RaidBoss @relation(fields: [raidId], references: [id], onDelete: Cascade)
-  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([raidId, userId])
-  @@map("raid_contributions")
-}
 
 model QueueSnapshot {
   guildId        String   @id @map("guild_id")

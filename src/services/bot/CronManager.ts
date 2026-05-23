@@ -29,7 +29,6 @@ type CronJobName =
     | 'lastfm-health-check'
     | 'drift-detection-sweep'
     | 'enrich-global-metadata'
-    | 'market-refresh'
     | 'rotate-bot-avatar';
 
 interface CronJobData {
@@ -91,14 +90,7 @@ export class CronManager {
             removeOnFail: true,
         });
 
-        // 6. Market refresh — every 6 hours
-        await cronQueue.add('market-refresh', { name: 'market-refresh' }, {
-            repeat: { pattern: '0 */6 * * *' },
-            removeOnComplete: true,
-            removeOnFail: true,
-        });
-
-        // 7. Rotate bot avatar — every 1 hour
+        // 6. Rotate bot avatar — every 1 hour
         await cronQueue.add('rotate-bot-avatar', { name: 'rotate-bot-avatar' }, {
             repeat: { pattern: '0 * * * *' },
             removeOnComplete: true,
@@ -123,9 +115,6 @@ export class CronManager {
                     break;
                 case 'enrich-global-metadata':
                     await handleGlobalMetadataEnrichment();
-                    break;
-                case 'market-refresh':
-                    await handleMarketRefresh();
                     break;
                 case 'rotate-bot-avatar':
                     await handleRotateAvatar();
@@ -342,15 +331,6 @@ async function handleGlobalMetadataEnrichment(): Promise<void> {
         }
         await new Promise(r => setTimeout(r, 1100));
     }
-}
-
-/**
- * Rotates the global album market stock.
- */
-async function handleMarketRefresh(): Promise<void> {
-    const { AlbumGameService } = await import('./AlbumGameService');
-    await AlbumGameService.refreshMarket();
-    LoggerService.info('Global Market has been refreshed.', 'CronManager');
 }
 
 /**
