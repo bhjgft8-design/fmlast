@@ -266,7 +266,7 @@ export class Spotify {
     }
 
     /** Get track metadata (cover, Spotify URL, duration, names) */
-    static async getTrackInfo(trackName: string, artistName: string): Promise<{ 
+    static async getTrackInfo(trackName: string, artistName: string, albumHint?: string): Promise<{ 
         coverUrl: string | null; 
         trackUrl: string | null; 
         previewUrl: string | null;
@@ -277,11 +277,13 @@ export class Spotify {
     }> {
         if (this.isDisabled()) return { coverUrl: null, trackUrl: null, previewUrl: null, durationMs: 0, resolvedArtist: null, resolvedTrack: null, albumName: null };
 
-        const cacheKey = `sp:info:tr:${artistName.toLowerCase()}:${trackName.toLowerCase()}`;
+        const hintPart = albumHint ? `:${albumHint.toLowerCase()}` : '';
+        const cacheKey = `sp:info:tr:v2:${artistName.toLowerCase()}:${trackName.toLowerCase()}${hintPart}`;
         return CacheService.wrap(cacheKey, 604800, async () => {
             try {
                 const token = await this.getToken();
                 const cleanQuery = `${artistName} ${trackName}`.replace(/[^\w\s]/g, '');
+                const cleanAlbumHint = albumHint ? this.clean(albumHint) : '';
 
                 // Try Raw search first (more reliable for bands with spaces)
                 const { data } = await axios.get('https://api.spotify.com/v1/search', {
@@ -296,7 +298,7 @@ export class Spotify {
                 const tracks = data.tracks?.items || [];
                 const overrideId = ArtistMetadataService.getSpotifyId(artistName);
 
-                const track = tracks.find((t: any) => {
+                const validTracks = tracks.filter((t: any) => {
                     const titleMatch = this.validateTitle(trackName, t.name);
                     const artistMatch = t.artists?.some((a: any) => {
                         if (overrideId) return a.id === overrideId;
@@ -304,6 +306,14 @@ export class Spotify {
                     });
                     return titleMatch && artistMatch;
                 });
+                const track = cleanAlbumHint
+                    ? (validTracks.find((t: any) => this.clean(t.album?.name || '') === cleanAlbumHint)
+                        || validTracks.find((t: any) => {
+                            const albumName = this.clean(t.album?.name || '');
+                            return albumName.includes(cleanAlbumHint) || cleanAlbumHint.includes(albumName);
+                        })
+                        || validTracks[0])
+                    : validTracks[0];
 
                 // Fallback to raw search if strict search failed
                 if (!track) {

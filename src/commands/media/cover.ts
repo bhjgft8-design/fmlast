@@ -203,7 +203,8 @@ export default class CoverCommand extends BaseCommand {
       const userColorHex = (dbUser?.settings as any)?.embedColor || "#d51007";
       const userColorInt = parseInt(userColorHex.replace('#', ''), 16);
 
-      cdnUrl = await RenderCacheService.getCachedImage('track_info', artist, trackName, targetUsername || undefined);
+      const renderCacheVariant = album && album !== "Unknown Album" ? album : undefined;
+      cdnUrl = await RenderCacheService.getCachedImage('track_info', artist, trackName, targetUsername || undefined, renderCacheVariant);
 
       if (!cdnUrl) {
         const templateData = {
@@ -233,7 +234,7 @@ export default class CoverCommand extends BaseCommand {
               cdnUrl = stagingMessage.attachments.first()?.url || null;
 
               if (cdnUrl) {
-                await RenderCacheService.setCachedImage('track_info', artist, trackName, cdnUrl, targetUsername || undefined);
+                await RenderCacheService.setCachedImage('track_info', artist, trackName, cdnUrl, targetUsername || undefined, 86400, renderCacheVariant);
               }
 
               setTimeout(() => stagingMessage.delete().catch(() => { }), 86400000);

@@ -142,7 +142,7 @@ export class Deezer {
     }
 
     /** Search for a track and get full metadata, including artwork (Universal Search) */
-    static async searchTrack(artistName: string, trackName: string): Promise<{
+    static async searchTrack(artistName: string, trackName: string, albumHint?: string): Promise<{
         id: string;
         albumId: string | null;
         name: string;
@@ -169,6 +169,7 @@ export class Deezer {
             const clean = (s: string) => s.toLowerCase().replace(/[^a-z0-9]/g, '');
             const cleanArtist = clean(artistName || '');
             const cleanTrack = clean(trackName || '');
+            const cleanAlbumHint = albumHint ? clean(albumHint) : '';
 
             // INTELLIGENT SCORING SYSTEM: Deezer API is heavily biased towards popular artists
             const scoredResults = data.data.map((item: any) => {
@@ -178,6 +179,7 @@ export class Deezer {
                 
                 const cResArt = clean(resArt);
                 const cResTrack = clean(resTrack);
+                const cResColl = clean(resColl);
 
                 let score = 0;
 
@@ -209,6 +211,11 @@ export class Deezer {
                 const querySymbols = (artistName + trackName).replace(/[a-z0-9\s]/g, '');
                 const resSymbols = (resArt + resTrack + resColl).replace(/[a-z0-9\s]/g, '');
                 if (querySymbols && resSymbols.includes(querySymbols)) score += 800;
+
+                if (cleanAlbumHint && cResColl) {
+                    if (cResColl === cleanAlbumHint) score += 3500;
+                    else if (cResColl.includes(cleanAlbumHint) || cleanAlbumHint.includes(cResColl)) score += 1500;
+                }
 
                 // 5. PENALTY: Avoid matching "Lil Baby" if user typed "Lil Baba"
                 if (artistName.toLowerCase().includes('baba') && !resArt.includes('baba')) score -= 5000;

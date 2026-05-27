@@ -103,4 +103,17 @@ export class LoggerService {
         const sourceColor = source === 'Spotify' ? chalk.green(source) : source === 'Apple Music' ? chalk.red(source) : chalk.yellow(source);
         console.log(`  ${chalk.green('✓')} ${chalk.dim('UTR')}  ${sourceColor.padEnd(14)}  ${chalk.white(artist)} ${chalk.dim('—')} ${chalk.white(track)}`);
     }
+
+    static utrTiming(query: string, timings: Record<string, number>) {
+        const parts = Object.entries(timings)
+            .map(([name, ms]) => ms < 0 ? `${name}:skip` : `${name}:${ms.toFixed(ms < 10 ? 2 : 0)}ms`)
+            .join(' ');
+        console.log(`  ${chalk.cyan('timer')} ${chalk.dim('UTR')}  ${chalk.dim(query)}  ${chalk.gray(parts)}`);
+    }
+
+    static utrScoredResult(source: string, score: number, artist: string, track: string, album?: string | null) {
+        const sourceColor = source === 'Spotify' ? chalk.green(source) : source === 'Apple Music' ? chalk.red(source) : chalk.yellow(source);
+        const albumPart = album ? ` ${chalk.dim('on')} ${chalk.gray(album)}` : '';
+        console.log(`  ${chalk.green('score')} ${chalk.dim('UTR')}  ${sourceColor} ${chalk.dim(`(${score})`)}  ${chalk.white(artist)} ${chalk.dim('-')} ${chalk.white(track)}${albumPart}`);
+    }
 }

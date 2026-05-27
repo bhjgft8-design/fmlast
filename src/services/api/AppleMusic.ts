@@ -176,7 +176,7 @@ export class AppleMusic {
     }
 
     /** Search for a track and get full metadata, including artwork (Universal Search) */
-    static async searchTrack(artistName: string, trackName: string): Promise<{
+    static async searchTrack(artistName: string, trackName: string, albumHint?: string): Promise<{
         trackName: string;
         artistName: string;
         albumName: string | null;
@@ -205,6 +205,7 @@ export class AppleMusic {
                 const cleanQuery = clean(artistName ? `${artistName} ${trackName}` : trackName);
                 const cleanArtist = clean(artistName || '');
                 const cleanTrack = clean(trackName || '');
+                const cleanAlbumHint = albumHint ? clean(albumHint) : '';
 
                 const scoredResults = data.results.map((item: any) => {
                     const resTrack = (item.trackName || '').toLowerCase();
@@ -265,6 +266,12 @@ export class AppleMusic {
 
 
                     // 4. Collection/Album Preference
+                    if (cleanAlbumHint && resColl) {
+                        const cResColl = clean(resColl);
+                        if (cResColl === cleanAlbumHint) score += 3500;
+                        else if (cResColl.includes(cleanAlbumHint) || cleanAlbumHint.includes(cResColl)) score += 1500;
+                    }
+
                     // If the user provided a "❤️" or symbol hint and it matches the collection
                     const querySymbols = (artistName + trackName).replace(/[a-z0-9\s]/g, '');
                     const resSymbols = (resArt + resTrack + resColl).replace(/[a-z0-9\s]/g, '');

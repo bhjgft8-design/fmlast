@@ -5,6 +5,7 @@ import { LastFM } from './LastFM';
 import { CacheService } from '../bot/CacheService';
 import { TitleCleaner } from '../../utils/title';
 import { LoggerService } from '../bot/LoggerService';
+import { ProviderCircuitBreaker } from './ProviderCircuitBreaker';
 
 export interface ResolvedTrack {
     artist: string;
@@ -21,10 +22,32 @@ export interface ResolvedTrack {
         youtube: string | null;
     };
     source: string;
+    resolverMeta?: {
+        selectedScore: number;
+        timings: Record<string, number>;
+        candidates: Array<{ source: string; score: number; album: string | null; durationMs: number }>;
+    };
 }
 
 export class TrackResolverService {
     private static CACHE_TTL = 86400; // 24 hours
+
+    private static async timed<T>(name: 'spotify' | 'apple' | 'deezer' | 'youtube' | 'lastfm', task: () => Promise<T>): Promise<{ name: string; ms: number; value: T | null; skipped: boolean }> {
+        if (!ProviderCircuitBreaker.isAvailable(name)) {
+            return { name, ms: 0, value: null, skipped: true };
+        }
+
+        const start = performance.now();
+        try {
+            const value = await task();
+            if (value) ProviderCircuitBreaker.recordSuccess(name);
+            else ProviderCircuitBreaker.recordFailure(name);
+            return { name, ms: performance.now() - start, value, skipped: false };
+        } catch {
+            ProviderCircuitBreaker.recordFailure(name);
+            return { name, ms: performance.now() - start, value: null, skipped: false };
+        }
+    }
 
     /**
      * Resolves metadata for a track from all available sources in parallel.
@@ -34,8 +57,10 @@ export class TrackResolverService {
      */
     static async resolve(artistName: string, trackName: string, forceRefresh = false, albumHint?: string): Promise<ResolvedTrack> {
         const query = `${artistName} - ${trackName}`.toLowerCase().trim();
+        const normalizedAlbumHint = albumHint?.trim() || '';
+        const queryWithContext = normalizedAlbumHint ? `${query} @ ${normalizedAlbumHint.toLowerCase()}` : query;
         // v13: Strict similarity validation + CAS fix
-        const cacheKey = `utr:v14:resolve:${Buffer.from(query).toString('base64')}`;
+        const cacheKey = `utr:v15:resolve:${Buffer.from(queryWithContext).toString('base64')}`;
 
         // 1. Check Redis Cache
         if (!forceRefresh) {
@@ -48,19 +73,23 @@ export class TrackResolverService {
 
         // 1b. Album Cover Fast-Path
         let cachedAlbumCover: string | null = null;
-        if (albumHint) {
-            const albumCoverKey = `utr:cover:v11:${Buffer.from(`${artistName.toLowerCase()}:${albumHint.toLowerCase()}`).toString('base64')}`;
+        if (normalizedAlbumHint) {
+            const albumCoverKey = `utr:cover:v12:${Buffer.from(`${artistName.toLowerCase()}:${normalizedAlbumHint.toLowerCase()}`).toString('base64')}`;
             cachedAlbumCover = await CacheService.get<string>(albumCoverKey) || null;
         }
 
         // 2. Parallel API Fetch
-        const [sp, am, dz, yt, lfm] = await Promise.all([
-            Spotify.getTrackInfo(trackName, artistName).catch(() => null),
-            AppleMusic.searchTrack(artistName, trackName).catch(() => null),
-            Deezer.searchTrack(artistName, trackName).catch(() => null),
-            this.getYoutubeLink(artistName, trackName).catch(() => null),
-            LastFM.getTrackInfo(artistName, trackName).catch(() => null)
+        LoggerService.utrFetch(queryWithContext);
+        const timedFetches = await Promise.all([
+            this.timed('spotify', () => Spotify.getTrackInfo(trackName, artistName, normalizedAlbumHint || undefined)),
+            this.timed('apple', () => AppleMusic.searchTrack(artistName, trackName, normalizedAlbumHint || undefined)),
+            this.timed('deezer', () => Deezer.searchTrack(artistName, trackName, normalizedAlbumHint || undefined)),
+            this.timed('youtube', () => this.getYoutubeLink(artistName, trackName)),
+            this.timed('lastfm', () => LastFM.getTrackInfo(artistName, trackName))
         ]);
+        const timings = Object.fromEntries(timedFetches.map(item => [item.name, item.skipped ? -1 : item.ms]));
+        LoggerService.utrTiming(queryWithContext, timings);
+        const [sp, am, dz, yt, lfm] = timedFetches.map(item => item.value) as any[];
 
         // 3. Resolve Artist Avatar
         const bestArtistName = sp?.resolvedArtist || am?.artistName || dz?.artist || artistName;
@@ -71,9 +100,20 @@ export class TrackResolverService {
         const artistAvatarUrl = spAvatar || dzAvatar || null;
 
         // 4. Intelligence: Combine the best data points with STRICT similarity validation
-        const clean = (s: string) => (s || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+        const normalizeFeaturedArtists = (s: string) => (s || '')
+            .toLowerCase()
+            .replace(/\b(featuring|feat\.?|ft\.?|with)\b/g, ' ')
+            .replace(/\s+x\s+/g, ' ')
+            .replace(/&/g, ' and ');
+        const clean = (s: string) => normalizeFeaturedArtists(s).replace(/[^a-z0-9]/g, '');
         const qTrack = clean(trackName);
         const qArtist = clean(artistName);
+        const versionTerms = ['remix', 'live', 'acoustic', 'sped up', 'speed up', 'slowed', 'reverb', 'demo', 'remaster', 'remastered', 'edit', 'instrumental', 'karaoke', 'cover', 'deluxe'];
+        const getVersions = (s: string) => {
+            const normalized = normalizeFeaturedArtists(s);
+            return versionTerms.filter(term => normalized.includes(term));
+        };
+        const qVersions = getVersions(trackName);
 
         // Known artists where strict matching fails — bypass isMatch entirely
         const TRUSTED_ARTISTS = [
@@ -118,17 +158,126 @@ export class TrackResolverService {
         const isAmValid = am?.trackName && (isTrustedArtist || isMatch(am.trackName, am.artistName));
         const isDzValid = dz?.name && (isTrustedArtist || isMatch(dz.name, dz.artist));
 
-        const artist = (isSpValid ? sp?.resolvedArtist : (isAmValid ? am?.artistName : (isDzValid ? dz?.artist : artistName))) || artistName;
-        const title = (isSpValid ? sp?.resolvedTrack : (isAmValid ? am?.trackName : (isDzValid ? dz?.name : trackName))) || trackName;
-        const album = (isSpValid ? sp?.albumName : (isAmValid ? am?.albumName : (isDzValid ? dz?.album : null))) || albumHint || null;
-        
+        type Candidate = {
+            source: string;
+            artist: string;
+            title: string;
+            album: string | null;
+            artworkUrl: string | null;
+            previewUrl: string | null;
+            durationMs: number;
+            link: string | null;
+            valid: boolean;
+            score: number;
+        };
+
+        const candidateInputs: Array<Omit<Candidate, 'score'> & { providerBoost: number }> = [
+            {
+                source: 'Spotify',
+                artist: sp?.resolvedArtist || artistName,
+                title: sp?.resolvedTrack || trackName,
+                album: sp?.albumName || null,
+                artworkUrl: sp?.coverUrl || null,
+                previewUrl: sp?.previewUrl || null,
+                durationMs: sp?.durationMs || 0,
+                link: sp?.trackUrl || null,
+                valid: !!isSpValid,
+                providerBoost: 8
+            },
+            {
+                source: 'Apple Music',
+                artist: am?.artistName || artistName,
+                title: am?.trackName || trackName,
+                album: am?.albumName || null,
+                artworkUrl: am?.artworkUrl ? am.artworkUrl.replace('{w}x{h}', '1000x1000') : null,
+                previewUrl: am?.previewUrl || null,
+                durationMs: am?.durationMs || 0,
+                link: am?.storeUrl || null,
+                valid: !!isAmValid,
+                providerBoost: 6
+            },
+            {
+                source: 'Deezer',
+                artist: dz?.artist || artistName,
+                title: dz?.name || trackName,
+                album: dz?.album || null,
+                artworkUrl: dz?.artworkUrl || null,
+                previewUrl: dz?.previewUrl || null,
+                durationMs: dz?.durationMs || 0,
+                link: dz?.url || null,
+                valid: !!isDzValid,
+                providerBoost: 4
+            }
+        ];
+        const validInputs = candidateInputs.filter(candidate => candidate.valid);
+
+        const scoreCandidate = (candidate: Omit<Candidate, 'score'>, providerBoost: number): Candidate => {
+            if (!candidate.valid) return { ...candidate, score: -1 };
+            const cTitle = clean(candidate.title);
+            const cArtist = clean(candidate.artist);
+            const cAlbum = clean(candidate.album || '');
+            const cHint = clean(normalizedAlbumHint);
+            const cVersions = getVersions(candidate.title);
+            let score = 100 + providerBoost;
+
+            if (cTitle === qTrack) score += 70;
+            else if (cTitle.includes(qTrack) || qTrack.includes(cTitle)) score += 35;
+
+            if (!qArtist) score += 10;
+            else if (cArtist === qArtist) score += 55;
+            else if (cArtist.includes(qArtist) || qArtist.includes(cArtist)) score += 25;
+
+            if (cHint && cAlbum) {
+                if (cAlbum === cHint) score += 90;
+                else if (cAlbum.includes(cHint) || cHint.includes(cAlbum)) score += 40;
+            }
+
+            const missingRequestedVersions = qVersions.filter(term => !cVersions.includes(term));
+            const extraCandidateVersions = cVersions.filter(term => !qVersions.includes(term));
+            if (qVersions.length > 0 && missingRequestedVersions.length === 0) score += 35;
+            if (missingRequestedVersions.length > 0) score -= 45;
+            if (qVersions.length === 0 && extraCandidateVersions.length > 0) score -= 25;
+
+            const durationMatches = validInputs.filter(peer => {
+                if (peer.source === candidate.source || !peer.durationMs || !candidate.durationMs) return false;
+                return Math.abs(peer.durationMs - candidate.durationMs) <= 4000;
+            }).length;
+            score += durationMatches * 18;
+
+            const agreementMatches = validInputs.filter(peer => {
+                if (peer.source === candidate.source) return false;
+                const sameTitle = clean(peer.title) === cTitle;
+                const sameAlbum = !!peer.album && !!candidate.album && clean(peer.album) === cAlbum;
+                const sameArtist = clean(peer.artist) === cArtist;
+                return sameTitle && sameArtist && (!candidate.album || !peer.album || sameAlbum);
+            }).length;
+            score += agreementMatches * 20;
+
+            if (candidate.artworkUrl) score += 25;
+            if (candidate.previewUrl) score += 5;
+            if (candidate.link) score += 10;
+            if (candidate.durationMs > 0) score += 5;
+            return { ...candidate, score };
+        };
+
+        const candidates: Candidate[] = candidateInputs
+            .map(({ providerBoost, ...candidate }) => scoreCandidate(candidate, providerBoost))
+            .filter(candidate => candidate.score >= 0);
+
+        const best = candidates.sort((a, b) => b.score - a.score)[0];
+
+        const artist = best?.artist || artistName;
+        const title = best?.title || trackName;
+        const album = normalizedAlbumHint || best?.album || null;
+
         // Artwork logic
         const lfmImage = lfm?.album?.image?.find((img: any) => img.size === 'extralarge')?.['#text']
             || lfm?.album?.image?.find((img: any) => img.size === 'large')?.['#text'];
         const isLfmValid = lfmImage && !LastFM.isDefaultImage(lfmImage);
 
         let artworkUrl = cachedAlbumCover 
-            || ((isSpValid && sp?.coverUrl) ? sp.coverUrl : (isAmValid && am?.artworkUrl ? am.artworkUrl.replace('{w}x{h}', '1000x1000') : (isDzValid ? dz?.artworkUrl : (isLfmValid ? lfmImage : null))));
+            || best?.artworkUrl
+            || (isLfmValid ? lfmImage : null);
 
         if (!isSpValid && !isAmValid && !isDzValid) {
             console.warn(`[UTR] Match failed for: ${query}. SP:${!!sp?.resolvedTrack} AM:${!!am?.trackName} DZ:${!!dz?.name}`);
@@ -140,28 +289,36 @@ export class TrackResolverService {
             title,
             album,
             artworkUrl,
-            previewUrl: (isSpValid && sp?.previewUrl ? sp.previewUrl : null) 
-                || (isAmValid && am?.previewUrl ? am.previewUrl : null) 
-                || (isDzValid && dz?.previewUrl ? dz.previewUrl : null) 
-                || null,
-            durationMs: (isSpValid ? sp?.durationMs : (isAmValid ? am?.durationMs : dz?.durationMs)) || 0,
+            previewUrl: best?.previewUrl || null,
+            durationMs: best?.durationMs || 0,
             links: {
                 spotify: (isSpValid ? sp?.trackUrl : null),
                 apple: (isAmValid ? am?.storeUrl : null),
                 deezer: (isDzValid ? dz?.url : null),
                 youtube: yt || null
             },
-            source: isSpValid ? 'Spotify' : (isAmValid ? 'Apple Music' : (isDzValid ? 'Deezer' : 'Last.fm Fallback'))
+            source: best?.source || 'Last.fm Fallback',
+            resolverMeta: {
+                selectedScore: best?.score || 0,
+                timings,
+                candidates: candidates.map(candidate => ({
+                    source: candidate.source,
+                    score: candidate.score,
+                    album: candidate.album,
+                    durationMs: candidate.durationMs
+                }))
+            }
         };
 
         // 5. Store track result in cache
         await CacheService.set(cacheKey, resolved, this.CACHE_TTL);
-        LoggerService.utrResult(resolved.source, resolved.artist, resolved.title);
+        if (best) LoggerService.utrScoredResult(resolved.source, best.score, resolved.artist, resolved.title, resolved.album);
+        else LoggerService.utrResult(resolved.source, resolved.artist, resolved.title);
 
 
         // 5b. Write-through: store the album cover separately for future tracks on the same album
         if (artworkUrl && album) {
-            const albumCoverKey = `utr:cover:v11:${Buffer.from(`${artist.toLowerCase()}:${album.toLowerCase()}`).toString('base64')}`;
+            const albumCoverKey = `utr:cover:v12:${Buffer.from(`${artist.toLowerCase()}:${album.toLowerCase()}`).toString('base64')}`;
             await CacheService.set(albumCoverKey, artworkUrl, this.CACHE_TTL);
         }
 
